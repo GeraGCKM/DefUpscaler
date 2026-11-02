@@ -102,7 +102,7 @@ def main():
         tensor = torch.from_numpy(pixels.copy()).permute(2, 0, 1).unsqueeze(0).float() / 255
         with torch.no_grad():
             expected = wrapper(tensor).squeeze(0).permute(1, 2, 0).numpy()
-        actual = np.asarray(model.predict({"input": Image.fromarray(pixels)})["output"], dtype=np.float32)
+        actual = np.asarray(model.predict({"input": Image.fromarray(pixels)})["output"].convert("RGB"), dtype=np.float32)
         mae = float(np.abs(expected - actual).mean())
         if not np.isfinite(mae) or mae > 2.0:
             raise RuntimeError(f"Core ML parity failed: MAE={mae:.4f}/255")
