@@ -32,6 +32,10 @@ jobs:
         run: python -m pip install -r scripts/requirements-model.txt
       - name: Convert and validate model
         run: python scripts/convert_model.py
+      - name: End-to-end Core ML image test
+        run: |
+          xcrun coremlcompiler compile build/models/Anime4x.mlpackage build/models
+          DEFUPSCALER_TEST_MODEL="$PWD/build/models/Anime4x.mlmodelc" swift test --filter EngineIntegrationTests
       - name: Package application
         run: bash scripts/package.sh
       - uses: actions/upload-artifact@v4

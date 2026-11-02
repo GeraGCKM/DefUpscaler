@@ -13,7 +13,9 @@ public actor UpscaleEngine {
     private var criticalMemory = false
     private var pressure: DispatchSourceMemoryPressure?
 
-    public init() {}
+    private let suppliedModelURL: URL?
+
+    public init(modelURL: URL? = nil) { suppliedModelURL = modelURL }
 
     public func process(url: URL, scale: Int, gentle: Bool,
                         progress: @escaping @Sendable (Double) async -> Void) async throws -> URL {
@@ -39,7 +41,7 @@ public actor UpscaleEngine {
         let image = input.transformed(by: CGAffineTransform(translationX: -input.extent.minX, y: -input.extent.minY))
         let plan = try JobPlan(width: Int(image.extent.width), height: Int(image.extent.height), scale: scale,
                                memoryBytes: ProcessInfo.processInfo.physicalMemory)
-        guard let modelURL = Bundle.main.url(forResource: "Anime4x", withExtension: "mlmodelc") else {
+        guard let modelURL = suppliedModelURL ?? Bundle.main.url(forResource: "Anime4x", withExtension: "mlmodelc") else {
             throw UpscaleError.missingModel
         }
         let configuration = MLModelConfiguration()
