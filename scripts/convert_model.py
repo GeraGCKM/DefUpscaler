@@ -39,9 +39,11 @@ class RRDB(nn.Module):
 
 
 class RRDBNet(nn.Module):
-    def __init__(self, blocks=6):
+    def __init__(self, blocks=6, scale=4):
         super().__init__()
-        self.conv_first = nn.Conv2d(3, 64, 3, 1, 1)
+        self.scale = scale
+        # Official x2plus is an x4 RRDB trunk after pixel-unshuffle by 2.
+        self.conv_first = nn.Conv2d(12 if scale == 2 else 3, 64, 3, 1, 1)
         self.body = nn.Sequential(*(RRDB() for _ in range(blocks)))
         self.conv_body = nn.Conv2d(64, 64, 3, 1, 1)
         self.conv_up1 = nn.Conv2d(64, 64, 3, 1, 1)
@@ -50,6 +52,8 @@ class RRDBNet(nn.Module):
         self.conv_last = nn.Conv2d(64, 3, 3, 1, 1)
 
     def forward(self, x):
+        if self.scale == 2:
+            x = F.pixel_unshuffle(x, 2)
         first = self.conv_first(x)
         x = first + self.conv_body(self.body(first))
         x = F.leaky_relu(self.conv_up1(F.interpolate(x, scale_factor=2, mode="nearest")), 0.2)
@@ -66,7 +70,7 @@ class ImageOutput(nn.Module):
         return torch.clamp(self.network(x), 0, 1) * 255
 
 
-def convert(name, filename, url, digest_expected, blocks):
+def convert(name, filename, url, digest_expected, blocks, scale=4):
     OUT.mkdir(parents=True, exist_ok=True)
     weights = OUT / filename
     if not weights.exists():
@@ -75,7 +79,7 @@ def convert(name, filename, url, digest_expected, blocks):
     expected_digest = digest_expected
     if digest != expected_digest:
         raise RuntimeError("Model checksum mismatch; refusing to load weights")
-    net = RRDBNet(blocks).eval()
+    net = RRDBNet(blocks, scale=scale).eval()
     state = torch.load(weights, map_location="cpu", weights_only=True)
     net.load_state_dict(state["params_ema"], strict=True)
     wrapper = ImageOutput(net).eval()
@@ -96,7 +100,7 @@ def convert(name, filename, url, digest_expected, blocks):
             compute_precision=ct.precision.FLOAT16, skip_model_load=True,
         )
         model.author = "Real-ESRGAN authors; Core ML packaging by DefUpscaler"
-        model.short_description = filename + f"; fixed RGB patch {side}, output 4x"
+        model.short_description = filename + f"; fixed RGB patch {side}, output {scale}x"
         model.license = "BSD-3-Clause; see THIRD_PARTY_NOTICES.md"
         model.save(str(OUT / f"{variant}.mlpackage"))
         # PROVISIONAL: independent PyTorch golden outputs; Swift/Core ML verifies
@@ -115,7 +119,7 @@ def convert(name, filename, url, digest_expected, blocks):
         errors[side] = "pending native Swift Core ML parity gate"
 
     report = {"source": url, "sha256": hashlib.sha256(weights.read_bytes()).hexdigest(),
-              "parity_fixture_status": errors, "tiles": [96, 160, 224], "scale": 4,
+              "parity_fixture_status": errors, "tiles": [96, 160, 224], "scale": scale,
               "torch": torch.__version__, "coremltools": ct.__version__}
     return report
 
@@ -127,5 +131,8 @@ if __name__ == "__main__":
     reports["Photo4x"] = convert("Photo4x", "RealESRGAN_x4plus.pth",
         "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth",
         "4fa0d38905f75ac06eb49a7951b426670021be3018265fd191d2125df9d682f1", 23)
+    reports["Photo2x"] = convert("Photo2x", "RealESRGAN_x2plus.pth",
+        "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth",
+        "49fafd45f8fd7aa8d31ab2a22d14d91b536c34494a5cfe31eb5d89c2fa266abb", 23, scale=2)
     (OUT / "model-provenance.json").write_text(json.dumps(reports, indent=2) + "\n")
     print(json.dumps(reports, indent=2))

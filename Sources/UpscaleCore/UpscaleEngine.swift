@@ -14,7 +14,11 @@ public actor UpscaleEngine {
     private var criticalMemory = false
     private var busy = false
     private let suppliedModelURL: URL?
-    public init(modelURL: URL? = nil) { suppliedModelURL = modelURL }
+    private let suppliedModelScale: Int
+    public init(modelURL: URL? = nil, modelScale: Int = 4) {
+        suppliedModelURL = modelURL
+        suppliedModelScale = modelScale
+    }
 
     public func process(url: URL, scale: Int, mode: ImageMode = .illustration,
                         progress: @escaping @Sendable (Double) async -> Void,
@@ -44,7 +48,12 @@ public actor UpscaleEngine {
         // Gain-map HEIC/HDR is not claimed as supported: only the SDR base is decoded.
         // Deep input is rejected above; every accepted image is color-managed into sRGB.
         let image = input.transformed(by: .init(translationX: -input.extent.minX, y: -input.extent.minY))
-        guard let modelURL = suppliedModelURL ?? Bundle.main.url(forResource: mode.modelName, withExtension: "mlmodelc") else {
+        // Native 2× photo inference is preferred when its verified profile is bundled.
+        // Explicitly supplied test models retain their declared native scale.
+        let descriptor = ModelCatalog.select(mode: mode, requestedScale: scale,
+            hasNativePhoto2x: Bundle.main.url(forResource: "Photo2x", withExtension: "mlmodelc") != nil)
+        let nativeScale = suppliedModelURL == nil ? descriptor.nativeScale : suppliedModelScale
+        guard let modelURL = suppliedModelURL ?? Bundle.main.url(forResource: descriptor.resource, withExtension: "mlmodelc") else {
             throw UpscaleError.missingModel
         }
         await status("Preparando modelo…")
@@ -113,11 +122,13 @@ public actor UpscaleEngine {
                     guard let array = prediction.featureValue(for: "output")?.multiArrayValue else {
                         throw UpscaleError.invalidPrediction
                     }
-                    let output = try TensorImage.make(array, side: side * 4, colorSpace: colorSpace)
-                    // Resample with context still present, then crop; avoids independent hard-edge resampling.
-                    let resized = CIImage(cgImage: output).applyingFilter("CILanczosScaleTransform", parameters: [
-                        kCIInputScaleKey: Double(scale) / 4, kCIInputAspectRatioKey: 1.0
-                    ]).transformed(by: .init(translationX: CGFloat((x - JobPlan.padding) * scale), y: CGFloat((y - JobPlan.padding) * scale)))
+                    let output = try TensorImage.make(array, side: side * nativeScale, colorSpace: colorSpace)
+                    // Avoid interpolating a native-resolution prediction. Other scales
+                    // resample with context *before* cropping, preventing edge seams.
+                    let neural = CIImage(cgImage: output)
+                    let resized = (scale == nativeScale ? neural : neural.applyingFilter("CILanczosScaleTransform", parameters: [
+                        kCIInputScaleKey: Double(scale) / Double(nativeScale), kCIInputAspectRatioKey: 1.0
+                    ])).transformed(by: .init(translationX: CGFloat((x - JobPlan.padding) * scale), y: CGFloat((y - JobPlan.padding) * scale)))
                     let rect = CGRect(x: x * scale, y: y * scale, width: width * scale, height: rowHeight * scale)
                     let restored = resized.applyingFilter("CIBlendWithAlphaMask", parameters: [
                         kCIInputBackgroundImageKey: CIImage(color: .clear).cropped(to: rect),
@@ -156,7 +167,7 @@ public actor UpscaleEngine {
             guard CGImageDestinationFinalize(writer) else { throw UpscaleError.invalidImage }
             try Task.checkCancellation()
             await progress(1)
-            logger.info("Completed mode=\(mode.rawValue) scale=\(scale) seconds=\(Date().timeIntervalSince(started))")
+            logger.info("Completed mode=\(mode.rawValue) nativeScale=\(nativeScale) scale=\(scale) seconds=\(Date().timeIntervalSince(started))")
             return destination
         } catch {
             try? FileManager.default.removeItem(at: destination)

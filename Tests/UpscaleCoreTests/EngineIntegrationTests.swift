@@ -76,6 +76,26 @@ final class EngineIntegrationTests: XCTestCase {
             }
         }
     }
+    func testNativePhoto2xIfProvided() async throws {
+        guard let path = ProcessInfo.processInfo.environment["DEFUPSCALER_PHOTO2_MODEL"] else {
+            throw XCTSkip("Native Photo2x compiled model required")
+        }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let input = folder.appendingPathComponent("native2.png")
+        let context = CIContext()
+        let space = CGColorSpace(name: CGColorSpace.sRGB)!
+        let image = CIImage(color: .green).cropped(to: CGRect(x: 0, y: 0, width: 11, height: 7))
+        try context.writePNGRepresentation(of: image, to: input, format: .RGBA8, colorSpace: space)
+        let output = try await UpscaleEngine(modelURL: URL(fileURLWithPath: path), modelScale: 2)
+            .process(url: input, scale: 2, mode: .photo) { _ in }
+        defer { try? FileManager.default.removeItem(at: output) }
+        let result = try XCTUnwrap(CIImage(contentsOf: output))
+        XCTAssertEqual(Int(result.extent.width), 22)
+        XCTAssertEqual(Int(result.extent.height), 14)
+    }
+
     func testAlreadyCancelledJobNeverLoadsModel() async throws {
         let engine = UpscaleEngine()
         let task = Task {
