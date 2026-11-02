@@ -96,8 +96,8 @@ def convert(name, filename, url, digest_expected, blocks):
     model.short_description = filename + "; adaptive RGB tiles 96/160/224, output 4x"
     model.license = "BSD-3-Clause; see THIRD_PARTY_NOTICES.md"
     model.save(str(OUT / f"{name}.mlpackage"))
-    print(f"Loading {name} on CPU/GPU", flush=True)
-    model = ct.models.MLModel(str(OUT / f"{name}.mlpackage"), compute_units=ct.ComputeUnit.CPU_AND_GPU)
+    print(f"Loading {name} on CPU (portable parity reference)", flush=True)
+    model = ct.models.MLModel(str(OUT / f"{name}.mlpackage"), compute_units=ct.ComputeUnit.CPU_ONLY)
     print(f"Validating {name}", flush=True)
     # Exercise the actual Core ML runtime, including image normalization and output quantization.
     rng = np.random.default_rng(42)

@@ -4,6 +4,7 @@ import CoreImage
 import ImageIO
 import UniformTypeIdentifiers
 import OSLog
+import Metal
 
 public actor UpscaleEngine {
     private let logger = Logger(subsystem: "io.geragckm.DefUpscaler", category: "inference")
@@ -48,7 +49,8 @@ public actor UpscaleEngine {
         }
         await status("Preparando modelo…")
         let configuration = MLModelConfiguration()
-        configuration.computeUnits = .cpuAndGPU
+        configuration.computeUnits = MTLCreateSystemDefaultDevice() == nil ? .cpuOnly : .all
+        logger.info("Compute path: \(MTLCreateSystemDefaultDevice() == nil ? "CPU (no Metal device)" : "automatic acceleration")")
         let model = try MLModel(contentsOf: modelURL, configuration: configuration)
         let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
         guard let canvas = CGContext(data: nil, width: plan.outputWidth, height: plan.outputHeight,

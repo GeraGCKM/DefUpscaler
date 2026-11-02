@@ -54,4 +54,7 @@ jobs:
           retention-days: 14
       - name: Diagnose native crashes
         if: failure()
-        run: python scripts/diagnose-crashes.py
+        run: |
+          sleep 5
+          python scripts/diagnose-crashes.py
+          log show --last 2m --style compact --predicate 'process == "Python" AND messageType == fault' || true
