@@ -8,7 +8,7 @@ A single main window owns an AppModel. The model invokes a serial UpscaleEngine 
 
 The initial build deliberately ships one illustration model. Add a photo model only after conversion, license and quality validation; do not label this model universal. Core ML uses the scheduler's available CPU/GPU/Neural Engine resources; `.all` is permission, not proof that every operator runs on the Neural Engine.
 
-Model provenance is generated during conversion: upstream source URL, SHA-256, tool versions and numerical error against PyTorch on deterministic inputs. Currently the upstream release URL is fixed and the digest recorded, not pre-pinned to a separately verified trusted hash. Strict `weights_only` loading and state-key validation avoid executing serialized Python from weights. Release hardening should pin a reviewed checksum and CI actions by commit.
+Model provenance is generated during conversion: upstream source URL, SHA-256, tool versions and numerical error against PyTorch on deterministic inputs. The upstream release URL and SHA-256 are pinned; the initial digest was measured from the official release asset. A mismatch stops conversion before loading weights. Strict `weights_only` loading and state-key validation avoid executing serialized Python from weights. CI actions are pinned by commit. Changes to weights or action pins require review.
 
 Aesthetic: system SF font, system window controls, 24pt margins, 16pt continuous rounded drop area, neutral system colors, one accent and no custom bundled fonts. Inspired by Antinote's simplicity, not a claim to reproduce its unpublished font/radius values.
 

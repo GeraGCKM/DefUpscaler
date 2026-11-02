@@ -71,6 +71,10 @@ def main():
     weights = OUT / "RealESRGAN_x4plus_anime_6B.pth"
     if not weights.exists():
         urllib.request.urlretrieve(URL, weights)
+    digest = hashlib.sha256(weights.read_bytes()).hexdigest()
+    expected_digest = "f872d837d3c90ed2e05227bed711af5671a6fd1c9f7d7e91c911a61f155e99da"
+    if digest != expected_digest:
+        raise RuntimeError("Model checksum mismatch; refusing to load weights")
     net = RRDBNet().eval()
     state = torch.load(weights, map_location="cpu", weights_only=True)
     net.load_state_dict(state["params_ema"], strict=True)

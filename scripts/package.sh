@@ -5,6 +5,10 @@ if [[ "$(uname -s)" != Darwin ]]; then
     echo 'Packaging requires macOS and Xcode command line tools.' >&2
     exit 1
 fi
+if [[ "$(uname -m)" != arm64 ]]; then
+    echo "This package targets Apple Silicon; build on an arm64 Mac." >&2
+    exit 1
+fi
 swift build -c release
 APP="$PWD/build/DefUpscaler.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
