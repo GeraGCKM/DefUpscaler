@@ -1,0 +1,9 @@
+.build/
+build/
+.swiftpm/
+.venv/
+__pycache__/
+.DS_Store
+*.mlpackage/
+*.mlmodelc/
+*.pth

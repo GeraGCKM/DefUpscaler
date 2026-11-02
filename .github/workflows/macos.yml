@@ -1,0 +1,45 @@
+name: macOS app
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain information
+        run: |
+          sw_vers
+          uname -m
+          swift --version
+          xcodebuild -version
+      - name: Tests
+        run: swift test --parallel
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: scripts/requirements-model.txt
+      - name: Install build-only conversion dependencies
+        run: python -m pip install -r scripts/requirements-model.txt
+      - name: Convert and validate model
+        run: python scripts/convert_model.py
+      - name: Package application
+        run: bash scripts/package.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DefUpscaler-macOS-AppleSilicon
+          path: |
+            build/DefUpscaler-macOS-AppleSilicon.zip
+            build/SHA256SUMS.txt
+            build/models/model-provenance.json
+          if-no-files-found: error
+          retention-days: 14
