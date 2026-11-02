@@ -1,4 +1,6 @@
-# DefUpscaler 0.2
+# DefUpscaler 0.2 — provisional build
+
+> **Provisional 0.2 build.** GitHub Actions passed native Core ML numerical parity and packaged inference on macOS; real Mac M5 thermal, multitasking, alpha-edge and UI acceptance remain outstanding. This is not a signed/notarized production release. See [the temporary validation report](docs/PROVISIONAL_COREML_VALIDATION.md).
 
 A small native macOS app for **drop → choose mode and scale → upscale → save**. SwiftUI/AppKit + Core ML. Offline image processing, no accounts, telemetry, runtime Python or third-party Swift dependencies. Apple Silicon, macOS 14+; native Liquid Glass controls on macOS 26+.
 
