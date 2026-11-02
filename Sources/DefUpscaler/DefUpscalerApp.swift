@@ -97,6 +97,7 @@ struct ContentView: View {
     @State private var showQueue = true
     @State private var original: NSImage?
     @State private var compareToken = UUID()
+    @State private var dividerDragStart: CGFloat?
     private var movement: Animation? { reduceMotion ? nil : .smooth(duration: 0.24) }
     private var canCompare: Bool { model.selected?.result != nil && original != nil }
 
@@ -232,9 +233,12 @@ struct ContentView: View {
                 Rectangle().fill(.clear).contentShape(Rectangle())
                     .frame(width: 30, height: size.height)
                     .position(x: size.width * divider, y: size.height / 2)
-                    .gesture(DragGesture(minimumDistance: 0).onChanged { value in
-                        divider = min(1, max(0, value.location.x / size.width + divider - 15 / size.width))
-                    })
+                    .gesture(DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            if dividerDragStart == nil { dividerDragStart = divider }
+                            divider = min(1, max(0, (dividerDragStart ?? divider) + value.translation.width / size.width))
+                        }
+                        .onEnded { _ in dividerDragStart = nil })
                 Rectangle().fill(.clear).contentShape(Rectangle())
                     .frame(width: size.width, height: size.height)
                     .onTapGesture { location in
@@ -306,10 +310,7 @@ struct ContentView: View {
                         VStack(spacing: 4) {
                             ZStack {
                                 RoundedRectangle(cornerRadius: 8).fill(.quaternary)
-                                if let thumb = NSImage(contentsOf: item.input) {
-                                    Image(nsImage: thumb).resizable().scaledToFill()
-                                        .frame(width: 62, height: 47).clipped()
-                                } else { Image(systemName: "photo").foregroundStyle(.secondary) }
+                                QueueThumbnail(url: item.input)
                             }
                             .frame(width: 62, height: 47).clipShape(RoundedRectangle(cornerRadius: 8))
                             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(
@@ -381,5 +382,31 @@ private struct MagnifyCompat: ViewModifier {
 private extension View {
     func magnificationGestureCompat(zoom: Binding<CGFloat>, gestureZoom: Binding<CGFloat>) -> some View {
         modifier(MagnifyCompat(zoom: zoom, gestureZoom: gestureZoom))
+    }
+}
+
+private struct QueueThumbnail: View {
+    let url: URL
+    @State private var thumbnail: NSImage?
+    var body: some View {
+        Group {
+            if let thumbnail {
+                Image(nsImage: thumbnail).resizable().scaledToFill()
+                    .frame(width: 62, height: 47).clipped()
+            } else {
+                Image(systemName: "photo").foregroundStyle(.secondary)
+            }
+        }
+        .task(id: url) {
+            let result: CGImage? = await Task.detached(priority: .utility) {
+                guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+                return CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 160
+                ] as CFDictionary)
+            }.value
+            thumbnail = result.map { NSImage(cgImage: $0, size: .zero) }
+        }
     }
 }
