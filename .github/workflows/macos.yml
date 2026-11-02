@@ -52,3 +52,6 @@ jobs:
             build/screenshots/
           if-no-files-found: error
           retention-days: 14
+      - name: Diagnose native crashes
+        if: failure()
+        run: python scripts/diagnose-crashes.py

@@ -126,6 +126,7 @@ struct ContentView: View {
                     Button(model.actualSize ? "Ajustar a ventana" : "Ver al 100 %") {
                         model.actualSize.toggle(); model.refreshPreview()
                     }.disabled(model.preview == nil)
+                    Button("Reescalar de nuevo", action: model.reprocessSelected).disabled(model.running || model.selected == nil)
                     Button("Guardar todos…", action: model.saveAll).disabled(!model.hasResults || model.saving)
                     Button("Reintentar pendientes o fallidos", action: model.retryFailed).disabled(model.running || model.items.isEmpty)
                     Divider()

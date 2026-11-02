@@ -121,6 +121,7 @@ final class AppModel: ObservableObject {
                 }
             } catch is CancellationError {} catch {
                 guard generation == token else { return }
+                preview = nil; metadata = nil; previewRevision = UUID()
                 message = error.localizedDescription
             }
             if generation == token { loading = false }
@@ -132,7 +133,7 @@ final class AppModel: ObservableObject {
         let jobMode = mode
         running = true
         message = nil
-        task = Task {
+        task = Task(priority: .utility) {
             defer { running = false; task = nil; phase = "" }
             while let index = items.firstIndex(where: { $0.state == "Pendiente" }) {
                 if Task.isCancelled { break }
@@ -163,6 +164,14 @@ final class AppModel: ObservableObject {
             }
         }
     }
+    func reprocessSelected() {
+        guard !running, let selected else { return }
+        // A new queue entry preserves the earlier result, even if it was not exported.
+        let item = QueueItem(input: selected.input)
+        items.append(item)
+        select(item.id)
+        start()
+    }
     func cancel() { task?.cancel() }
     private func setProgress(_ value: Double) { progress = value }
     private func setPhase(_ value: String) { phase = value }
@@ -178,7 +187,7 @@ final class AppModel: ObservableObject {
         panel.allowedContentTypes = [.png]
         panel.nameFieldStringValue = selected.input.deletingPathExtension().lastPathComponent + "-\(selected.outputScale ?? scale)x.png"
         guard panel.runModal() == .OK, let target = panel.url else { return }
-        if target.standardizedFileURL == selected.input.standardizedFileURL {
+        if target.resolvingSymlinksInPath().standardizedFileURL == selected.input.resolvingSymlinksInPath().standardizedFileURL {
             message = "Elige otro nombre para conservar el original."; return
         }
         export([(selected.id, result, target)])

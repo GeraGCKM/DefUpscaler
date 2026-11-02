@@ -84,16 +84,21 @@ def convert(name, filename, url, digest_expected, blocks):
     example = torch.rand(1, 3, 160, 160)
     with torch.no_grad():
         traced = torch.jit.trace(wrapper, example)
+    print(f"Converting {name}", flush=True)
     model = ct.convert(
         traced, inputs=[ct.ImageType(name="input", shape=ct.EnumeratedShapes(shapes=[(1, 3, n, n) for n in [96, 160, 224]], default=(1, 3, 96, 96)), scale=1 / 255)],
         outputs=[ct.TensorType(name="output", dtype=np.float32)],
         minimum_deployment_target=ct.target.macOS14,
         compute_precision=ct.precision.FLOAT16,
+        skip_model_load=True,
     )
     model.author = "Real-ESRGAN authors; Core ML packaging by DefUpscaler"
     model.short_description = filename + "; adaptive RGB tiles 96/160/224, output 4x"
     model.license = "BSD-3-Clause; see THIRD_PARTY_NOTICES.md"
     model.save(str(OUT / f"{name}.mlpackage"))
+    print(f"Loading {name} on CPU/GPU", flush=True)
+    model = ct.models.MLModel(str(OUT / f"{name}.mlpackage"), compute_units=ct.ComputeUnit.CPU_AND_GPU)
+    print(f"Validating {name}", flush=True)
     # Exercise the actual Core ML runtime, including image normalization and output quantization.
     rng = np.random.default_rng(42)
     errors = []

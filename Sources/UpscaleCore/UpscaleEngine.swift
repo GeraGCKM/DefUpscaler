@@ -48,7 +48,7 @@ public actor UpscaleEngine {
         }
         await status("Preparando modelo…")
         let configuration = MLModelConfiguration()
-        configuration.computeUnits = .all
+        configuration.computeUnits = .cpuAndGPU
         let model = try MLModel(contentsOf: modelURL, configuration: configuration)
         let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
         guard let canvas = CGContext(data: nil, width: plan.outputWidth, height: plan.outputHeight,
