@@ -84,33 +84,35 @@ def convert(name, filename, url, digest_expected, blocks):
     example = torch.rand(1, 3, 160, 160)
     with torch.no_grad():
         traced = torch.jit.trace(wrapper, example)
-    print(f"Converting {name}", flush=True)
-    model = ct.convert(
-        traced, inputs=[ct.ImageType(name="input", shape=ct.EnumeratedShapes(shapes=[(1, 3, n, n) for n in [96, 160, 224]], default=(1, 3, 96, 96)), scale=1 / 255)],
-        outputs=[ct.TensorType(name="output", dtype=np.float32)],
-        minimum_deployment_target=ct.target.macOS14,
-        compute_precision=ct.precision.FLOAT16,
-        skip_model_load=True,
-    )
-    model.author = "Real-ESRGAN authors; Core ML packaging by DefUpscaler"
-    model.short_description = filename + "; adaptive RGB tiles 96/160/224, output 4x"
-    model.license = "BSD-3-Clause; see THIRD_PARTY_NOTICES.md"
-    model.save(str(OUT / f"{name}.mlpackage"))
-    print(f"Loading {name} on CPU (portable parity reference)", flush=True)
-    model = ct.models.MLModel(str(OUT / f"{name}.mlpackage"), compute_units=ct.ComputeUnit.CPU_ONLY)
-    print(f"Validating {name}", flush=True)
-    # Exercise the actual Core ML runtime, including image normalization and output quantization.
     rng = np.random.default_rng(42)
-    errors = []
-    for pixels in [rng.integers(0, 256, (n, n, 3), dtype=np.uint8) for n in [96, 160, 224]] + [np.full((96, 96, 3), [30, 100, 220], dtype=np.uint8)]:
-        tensor = torch.from_numpy(pixels.copy()).permute(2, 0, 1).unsqueeze(0).float() / 255
-        with torch.no_grad():
-            expected = wrapper(tensor).squeeze(0).permute(1, 2, 0).numpy()
-        actual = np.asarray(model.predict({"input": Image.fromarray(pixels)})["output"], dtype=np.float32).squeeze(0).transpose(1, 2, 0)
-        mae = float(np.abs(expected - actual).mean())
-        if not np.isfinite(mae) or mae > 2.0:
-            raise RuntimeError(f"Core ML parity failed: MAE={mae:.4f}/255")
-        errors.append(mae)
+    errors = {}
+    for side in [96, 160, 224]:
+        variant = name if side == 96 else f"{name}-{side}"
+        print(f"Converting fixed profile {variant}", flush=True)
+        model = ct.convert(
+            traced, inputs=[ct.ImageType(name="input", shape=(1, 3, side, side), scale=1 / 255)],
+            outputs=[ct.TensorType(name="output", dtype=np.float32)],
+            minimum_deployment_target=ct.target.macOS14,
+            compute_precision=ct.precision.FLOAT16, skip_model_load=True,
+        )
+        model.author = "Real-ESRGAN authors; Core ML packaging by DefUpscaler"
+        model.short_description = filename + f"; fixed RGB patch {side}, output 4x"
+        model.license = "BSD-3-Clause; see THIRD_PARTY_NOTICES.md"
+        model.save(str(OUT / f"{variant}.mlpackage"))
+        print(f"Validating {variant} on CPU", flush=True)
+        model = ct.models.MLModel(str(OUT / f"{variant}.mlpackage"), compute_units=ct.ComputeUnit.CPU_ONLY)
+        errors[side] = []
+        for pixels in [rng.integers(0, 256, (side, side, 3), dtype=np.uint8),
+                       np.full((side, side, 3), [30, 100, 220], dtype=np.uint8)]:
+            tensor = torch.from_numpy(pixels.copy()).permute(2, 0, 1).unsqueeze(0).float() / 255
+            with torch.no_grad():
+                expected = wrapper(tensor).squeeze(0).permute(1, 2, 0).numpy()
+            actual = np.asarray(model.predict({"input": Image.fromarray(pixels)})["output"], dtype=np.float32).squeeze(0).transpose(1, 2, 0)
+            mae = float(np.abs(expected - actual).mean())
+            if not np.isfinite(mae) or mae > 2.0:
+                raise RuntimeError(f"Core ML parity failed: MAE={mae:.4f}/255")
+            errors[side].append(mae)
+        del model
     report = {"source": url, "sha256": hashlib.sha256(weights.read_bytes()).hexdigest(),
               "coreml_mae_255": errors, "tiles": [96, 160, 224], "scale": 4,
               "torch": torch.__version__, "coremltools": ct.__version__}

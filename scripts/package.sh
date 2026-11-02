@@ -14,11 +14,12 @@ APP="$PWD/build/DefUpscaler.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/DefUpscaler "$APP/Contents/MacOS/"
 cp packaging/Info.plist "$APP/Contents/Info.plist"
-for model in Anime4x Photo4x; do
-    xcrun coremlcompiler compile "build/models/$model.mlpackage" "$APP/Contents/Resources"
+for model in build/models/*.mlpackage; do
+    xcrun coremlcompiler compile "$model" "$APP/Contents/Resources"
 done
 cp THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
 cp build/models/model-provenance.json "$APP/Contents/Resources/"
+python3 scripts/deduplicate-weights.py "$APP/Contents/Resources"
 codesign --force --deep --sign - "$APP"
 codesign --verify --deep --strict "$APP"
 ditto -c -k --sequesterRsrc --keepParent "$APP" build/DefUpscaler-macOS-AppleSilicon.zip

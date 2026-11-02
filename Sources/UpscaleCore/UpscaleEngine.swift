@@ -51,7 +51,8 @@ public actor UpscaleEngine {
         let configuration = MLModelConfiguration()
         configuration.computeUnits = MTLCreateSystemDefaultDevice() == nil ? .cpuOnly : .all
         logger.info("Compute path: \(MTLCreateSystemDefaultDevice() == nil ? "CPU (no Metal device)" : "automatic acceleration")")
-        let model = try MLModel(contentsOf: modelURL, configuration: configuration)
+        var model: MLModel?
+        var loadedSide = 0
         let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
         guard let canvas = CGContext(data: nil, width: plan.outputWidth, height: plan.outputHeight,
             bitsPerComponent: 8, bytesPerRow: 0, space: colorSpace,
@@ -68,6 +69,17 @@ public actor UpscaleEngine {
         while y < plan.height {
             try Task.checkCancellation()
             let rowSide = governor.coreSide
+            let requestedSide = rowSide + 2 * JobPlan.padding
+            let variantChanged = loadedSide != requestedSide
+            if variantChanged {
+                model = nil
+                context.clearCaches()
+                let variantURL = requestedSide == 96 ? modelURL : modelURL.deletingLastPathComponent()
+                    .appendingPathComponent(modelURL.deletingPathExtension().lastPathComponent + "-\(requestedSide).mlmodelc")
+                model = try MLModel(contentsOf: variantURL, configuration: configuration)
+                loadedSide = requestedSide
+            }
+            guard let activeModel = model else { throw UpscaleError.missingModel }
             let rowHeight = min(rowSide, plan.height - y)
             var x = 0
             let rowStarted = Date()
@@ -97,7 +109,7 @@ public actor UpscaleEngine {
                     let patch = rgb.cropped(to: region).transformed(by: .init(translationX: -region.minX, y: -region.minY))
                     context.render(patch, to: buffer, bounds: CGRect(x: 0, y: 0, width: side, height: side), colorSpace: colorSpace)
                     let features = try MLDictionaryFeatureProvider(dictionary: ["input": MLFeatureValue(pixelBuffer: buffer)])
-                    let prediction = try model.prediction(from: features)
+                    let prediction = try activeModel.prediction(from: features)
                     guard let array = prediction.featureValue(for: "output")?.multiArrayValue else {
                         throw UpscaleError.invalidPrediction
                     }
@@ -126,7 +138,9 @@ public actor UpscaleEngine {
                     try await Task.sleep(for: .milliseconds(30))
                 }
             }
-            governor.observe(secondsPerPixel: Date().timeIntervalSince(rowStarted) / Double(plan.width * rowHeight), constrained: constrained)
+            if constrained || !variantChanged {
+                governor.observe(secondsPerPixel: Date().timeIntervalSince(rowStarted) / Double(plan.width * rowHeight), constrained: constrained)
+            }
             logger.debug("Adaptive row core=\(rowSide) next=\(governor.coreSide) constrained=\(constrained)")
             y += rowHeight
         }

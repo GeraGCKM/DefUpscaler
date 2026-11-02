@@ -34,12 +34,14 @@ jobs:
         run: python scripts/convert_model.py
       - name: End-to-end Core ML image test
         run: |
-          for model in Anime4x Photo4x; do
-            xcrun coremlcompiler compile "build/models/$model.mlpackage" build/models
+          for model in build/models/*.mlpackage; do
+            xcrun coremlcompiler compile "$model" build/models
           done
           DEFUPSCALER_TEST_MODEL="$PWD/build/models/Anime4x.mlmodelc" DEFUPSCALER_PHOTO_MODEL="$PWD/build/models/Photo4x.mlmodelc" swift test --filter EngineIntegrationTests
       - name: Package application
         run: bash scripts/package.sh
+      - name: Validate bundled model resources
+        run: DEFUPSCALER_TEST_MODEL="$PWD/build/DefUpscaler.app/Contents/Resources/Anime4x.mlmodelc" DEFUPSCALER_PHOTO_MODEL="$PWD/build/DefUpscaler.app/Contents/Resources/Photo4x.mlmodelc" swift test --filter EngineIntegrationTests
       - name: Launch and capture native UI
         run: bash scripts/capture-ui.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

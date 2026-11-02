@@ -160,6 +160,7 @@ final class AppModel: ObservableObject {
                     if let i = items.firstIndex(where: { $0.id == id }) { items[i].state = error.localizedDescription }
                     logger.error("Inference failed: \(String(reflecting: error), privacy: .private)")
                     message = error.localizedDescription
+                    if let failure = error as? UpscaleError, case .memoryPressure = failure { break }
                 }
             }
         }

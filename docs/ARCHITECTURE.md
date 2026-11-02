@@ -16,7 +16,7 @@ Available memory alone does not establish CPU/GPU contention. The governor is a 
 
 ## Images
 
-Core ML accepts enumerated 96/160/224 RGB patches. Each has16px context around a64/128/192 core. Borders clamp. RGB is unpremultiplied before inference; alpha is independently resampled and restored with Core Image. The sRGB working/output space makes the SDR contract explicit. Resizing occurs before cropping context to reduce independent-resampling seams. 8×/16× are model4× plus Lanczos;2× is model4× downsampled. Output limits apply to final dimensions.
+Core ML uses fixed96/160/224 RGB profiles to avoid the enumerated-shape runtime crash observed in CI. Only the active profile is loaded; byte-identical compiled weight files share bundle storage. Each has16px context around a64/128/192 core. Borders clamp. RGB is unpremultiplied before inference; alpha is independently resampled and restored with Core Image. The sRGB working/output space makes the SDR contract explicit. Resizing occurs before cropping context to reduce independent-resampling seams. 8×/16× are model4× plus Lanczos;2× is model4× downsampled. Output limits apply to final dimensions.
 
 Greater-than8-bit sources are rejected. HEIC gain-map enhancement is not processed; SDR base input may be accepted. HDR/wide-gamut preservation and metadata round-tripping are not claimed. Every output embeds an sRGB image color space. The alpha edge test catches accidental white flattening; visual halo/seam assessment on complex artwork remains necessary.
 
