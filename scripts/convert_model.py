@@ -99,22 +99,23 @@ def convert(name, filename, url, digest_expected, blocks):
         model.short_description = filename + f"; fixed RGB patch {side}, output 4x"
         model.license = "BSD-3-Clause; see THIRD_PARTY_NOTICES.md"
         model.save(str(OUT / f"{variant}.mlpackage"))
-        print(f"Validating {variant} on CPU", flush=True)
-        model = ct.models.MLModel(str(OUT / f"{variant}.mlpackage"), compute_units=ct.ComputeUnit.CPU_ONLY)
-        errors[side] = []
-        for pixels in [rng.integers(0, 256, (side, side, 3), dtype=np.uint8),
-                       np.full((side, side, 3), [30, 100, 220], dtype=np.uint8)]:
+        # PROVISIONAL: independent PyTorch golden outputs; Swift/Core ML verifies
+        # numerical parity, isolating the Python/Core ML bridge SIGTRAP.
+        golden = OUT / "parity" / variant
+        golden.mkdir(parents=True, exist_ok=True)
+        for i, pixels in enumerate([
+            rng.integers(0, 256, (side, side, 3), dtype=np.uint8),
+            np.full((side, side, 3), [30, 100, 220], dtype=np.uint8),
+        ]):
+            Image.fromarray(pixels).save(golden / f"input-{i}.png")
             tensor = torch.from_numpy(pixels.copy()).permute(2, 0, 1).unsqueeze(0).float() / 255
             with torch.no_grad():
-                expected = wrapper(tensor).squeeze(0).permute(1, 2, 0).numpy()
-            actual = np.asarray(model.predict({"input": Image.fromarray(pixels)})["output"], dtype=np.float32).squeeze(0).transpose(1, 2, 0)
-            mae = float(np.abs(expected - actual).mean())
-            if not np.isfinite(mae) or mae > 2.0:
-                raise RuntimeError(f"Core ML parity failed: MAE={mae:.4f}/255")
-            errors[side].append(mae)
-        del model
+                expected = wrapper(tensor).contiguous().numpy()
+            expected.astype("<f4").tofile(golden / f"expected-{i}.f32")
+        errors[side] = "pending native Swift Core ML parity gate"
+
     report = {"source": url, "sha256": hashlib.sha256(weights.read_bytes()).hexdigest(),
-              "coreml_mae_255": errors, "tiles": [96, 160, 224], "scale": 4,
+              "parity_fixture_status": errors, "tiles": [96, 160, 224], "scale": 4,
               "torch": torch.__version__, "coremltools": ct.__version__}
     return report
 
