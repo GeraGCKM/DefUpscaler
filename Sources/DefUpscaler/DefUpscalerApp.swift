@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import UpscaleCore
+import ImageIO
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var model: AppModel?
@@ -42,7 +43,7 @@ struct DefUpscalerApp: App {
                     }
                 }
         }
-        .defaultSize(width: 640, height: 570)
+        .defaultSize(width: 860, height: 670)
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) {
@@ -86,158 +87,299 @@ struct PrimaryAction: ViewModifier {
 
 struct ContentView: View {
     @ObservedObject var model: AppModel
-    @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var targeted = false
-    private var background: Color { scheme == .dark ? Color(red: 0.105, green: 0.115, blue: 0.13) : Color(red: 0.955, green: 0.955, blue: 0.945) }
-    private var panel: Color { scheme == .dark ? Color(red: 0.145, green: 0.155, blue: 0.17) : Color(red: 0.99, green: 0.99, blue: 0.98) }
-    private var accent: Color { scheme == .dark ? Color(red: 0.48, green: 0.64, blue: 0.79) : Color(red: 0.27, green: 0.43, blue: 0.59) }
-    private var animation: Animation? { reduceMotion ? nil : .smooth(duration: 0.25) }
+    @State private var compare = true
+    @State private var divider = 0.5
+    @State private var zoom: CGFloat = 1
+    @State private var gestureZoom: CGFloat = 1
+    @State private var showQueue = true
+    @State private var original: NSImage?
+    @State private var compareToken = UUID()
+    private var movement: Animation? { reduceMotion ? nil : .smooth(duration: 0.24) }
+    private var canCompare: Bool { model.selected?.result != nil && original != nil }
 
     var body: some View {
-        VStack(spacing: 14) {
-            previewArea
-            if model.items.count > 1 {
-                HStack(spacing: 10) {
-                    Picker("Cola", selection: Binding(get: { model.selectedID }, set: { if let id = $0 { model.select(id) } })) {
-                        ForEach(model.items) { item in
-                            Text("\(item.input.lastPathComponent) · \(item.state)").tag(Optional(item.id))
+        VStack(spacing: 0) {
+            ZStack(alignment: .bottom) {
+                workspace
+                VStack(spacing: 12) {
+                    Spacer()
+                    if model.running {
+                        VStack(spacing: 5) {
+                            ProgressView(value: model.progress)
+                            HStack {
+                                Text(model.phase)
+                                Spacer()
+                                Text("\(Int(model.progress * 100)) %").monospacedDigit()
+                            }.font(.caption)
                         }
-                    }.labelsHidden().accessibilityLabel("Imagen seleccionada de la cola")
-                    Text("\(model.items.count) imágenes").font(.caption).foregroundStyle(.secondary)
+                        .padding(12)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                        .padding(.horizontal, 32)
+                    }
+                    controls
+                }.padding(16)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if showQueue && !model.items.isEmpty { queue }
+        }
+        .frame(minWidth: 540, minHeight: 420)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .onChange(of: model.selectedID) { _ in loadComparison(); resetZoom() }
+        .onChange(of: model.selected?.result) { _ in loadComparison() }
+        .onChange(of: model.previewRevision) { _ in loadComparison() }
+        .onAppear(perform: loadComparison)
+        .onDrop(of: [.fileURL], isTargeted: $targeted) { providers in
+            var accepted = false
+            for provider in providers where provider.hasItemConformingToTypeIdentifier("public.file-url") {
+                accepted = true
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    if let url { Task { @MainActor in model.add([url]) } }
                 }
             }
-            HStack(spacing: 10) {
-                Picker("Tipo", selection: $model.mode) {
-                    ForEach(ImageMode.allCases, id: \.self) { Text($0.title).tag($0) }
-                }.labelsHidden().frame(maxWidth: 180).disabled(model.running)
-                Picker("Escala", selection: $model.scale) {
-                    ForEach([2, 4, 8, 16], id: \.self) { Text("\($0)×").tag($0) }
-                }.labelsHidden().frame(width: 68).disabled(model.running)
-                Spacer(minLength: 4)
-                Menu {
-                    Button("Añadir imágenes…", action: model.choose)
-                    if model.selected?.result != nil {
-                        Button(model.showingResult ? "Ver original" : "Ver resultado") {
-                            model.showingResult.toggle(); model.refreshPreview()
+            return accepted
+        }
+        .animation(movement, value: showQueue)
+        .animation(movement, value: model.selectedID)
+    }
+
+    private var workspace: some View {
+        GeometryReader { bounds in
+            let width = max(1, bounds.size.width)
+            let height = max(1, bounds.size.height)
+            ZStack {
+                Color(nsColor: .textBackgroundColor)
+                if let preview = model.preview {
+                    ScrollView([.horizontal, .vertical]) {
+                        GeometryReader { area in
+                            let fitted = fit(image: preview, in: CGSize(width: width, height: height))
+                            let displayed = CGSize(width: fitted.width * zoom * gestureZoom,
+                                                   height: fitted.height * zoom * gestureZoom)
+                            ZStack(alignment: .topLeading) {
+                                previewContent(preview, size: displayed)
+                                    .frame(width: displayed.width, height: displayed.height)
+                            }
+                            .frame(width: max(area.size.width, displayed.width),
+                                   height: max(area.size.height, displayed.height))
+                        }
+                        .frame(width: max(width, fit(image: preview, in: bounds.size).width * zoom * gestureZoom),
+                               height: max(height, fit(image: preview, in: bounds.size).height * zoom * gestureZoom))
+                    }
+                    .scrollIndicators(.hidden)
+                    .magnificationGestureCompat(zoom: $zoom, gestureZoom: $gestureZoom)
+                    .onTapGesture(count: 2) {
+                        if model.actualSize { resetZoom() }
+                        else { model.actualSize = true; zoom = actualZoom(preview: preview, size: bounds.size) }
+                    }
+                    .accessibilityLabel("Vista previa ampliable")
+                    .accessibilityAction(named: "Ajustar a ventana") { resetZoom() }
+                    .accessibilityAction(named: "Tamaño real") {
+                        zoom = actualZoom(preview: preview, size: bounds.size)
+                        model.actualSize = true
+                    }
+                } else {
+                    VStack(spacing: 12) {
+                        Image(systemName: "photo.on.rectangle.angled")
+                            .font(.system(size: 38, weight: .ultraLight))
+                        Text("Suelta tus imágenes aquí").font(.title3.weight(.medium))
+                        Button("Elegir imágenes", action: model.choose)
+                    }
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2, perform: model.choose)
+                }
+                if model.loading { ProgressView().controlSize(.small).padding(12).background(.regularMaterial, in: Capsule()) }
+                if targeted { RoundedRectangle(cornerRadius: 15).strokeBorder(.tint, lineWidth: 2).padding(6) }
+            }
+            .overlay(alignment: .topLeading) {
+                if model.preview != nil {
+                    HStack(spacing: 8) {
+                        Text(model.dimensions).monospacedDigit()
+                        if zoom != 1 {
+                            Button("Ajustar") { resetZoom() }
+                                .buttonStyle(.plain).foregroundStyle(.primary)
                         }
                     }
-                    Button(model.actualSize ? "Ajustar a ventana" : "Ver al 100 %") {
-                        model.actualSize.toggle(); model.refreshPreview()
-                    }.disabled(model.preview == nil)
-                    Button("Reescalar de nuevo", action: model.reprocessSelected).disabled(model.running || model.selected == nil)
-                    Button("Guardar todos…", action: model.saveAll).disabled(!model.hasResults || model.saving)
-                    Button("Reintentar pendientes o fallidos", action: model.retryFailed).disabled(model.running || model.items.isEmpty)
-                    Divider()
-                    Button("Borrar sesión y temporales", action: model.reset).disabled(model.running || model.saving)
-                    SettingsLink { Text("Ajustes…") }
-                } label: { Image(systemName: "ellipsis") }
-                .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Más opciones")
-                if model.running {
-                    Button("Cancelar", action: model.cancel).keyboardShortcut(.cancelAction)
-                } else if model.hasPending {
-                    Button("Reescalar", action: model.start).modifier(PrimaryAction()).keyboardShortcut(.defaultAction)
-                        .disabled(model.saving || model.loading)
-                } else if model.selected?.result != nil {
-                    Button("Guardar…", action: model.save).modifier(PrimaryAction()).disabled(model.saving)
-                } else {
-                    Button("Reescalar", action: model.start).modifier(PrimaryAction()).disabled(true)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .padding(10).background(.regularMaterial, in: Capsule()).padding(16)
                 }
             }
-            .controlSize(.large)
-            .padding(12)
-            .background {
-                if reduceTransparency { RoundedRectangle(cornerRadius: 16).fill(panel) }
-                else { RoundedRectangle(cornerRadius: 16).fill(.thinMaterial) }
-            }
-            if model.metadata != nil {
-                HStack {
-                    Text(model.dimensions).font(.system(.caption, design: .monospaced)).textSelection(.enabled).help(model.estimatedMemory)
-                    Spacer()
-                    if model.scale > 4 { Text("IA 4× + interpolación").font(.caption) }
-                    else if model.actualSize { Text("100 %").font(.system(.caption, design: .monospaced)) }
-                }.foregroundStyle(.secondary)
-            }
-            if model.running {
-                ProgressView(value: model.progress)
-                HStack {
-                    Text(model.phase)
-                    Spacer()
-                    Text("\(Int(model.progress * 100)) %").monospacedDigit()
-                }.font(.caption).foregroundStyle(.secondary)
-            } else if model.saving { ProgressView("Guardando…").controlSize(.small) }
-            if let message = model.message {
-                Text(message).font(.callout).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-        .padding(20)
-        .frame(minWidth: 520, minHeight: 460)
-        .tint(accent)
-        .background {
-            ZStack {
-                if !reduceTransparency { WindowMaterial() }
-                background.opacity(reduceTransparency ? 1 : 0.91)
-            }.ignoresSafeArea()
         }
     }
 
-    private var previewArea: some View {
-        GeometryReader { geometry in
-            let maxWidth = max(1, geometry.size.width - 12)
-            let maxHeight = max(1, geometry.size.height - 12)
-            let width = min(maxWidth, maxHeight * model.aspect)
-            let height = width / model.aspect
-            ZStack {
-                if model.actualSize, let preview = model.preview, model.metadata != nil {
-                    ScrollView([.horizontal, .vertical]) {
-                        Image(nsImage: preview).resizable().interpolation(.none)
-                            .frame(width: model.pixelViewSize.width / (NSScreen.main?.backingScaleFactor ?? 2),
-                                   height: model.pixelViewSize.height / (NSScreen.main?.backingScaleFactor ?? 2))
-                    }.background(panel).clipShape(RoundedRectangle(cornerRadius: 16))
-                } else {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 16, style: .continuous).fill(panel)
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .strokeBorder(targeted ? accent : Color.primary.opacity(0.13), style: StrokeStyle(lineWidth: 1, dash: model.preview == nil ? [5, 5] : []))
-                        if let preview = model.preview {
-                            Image(nsImage: preview).resizable().scaledToFit().padding(6)
-                                .id(model.previewRevision).transition(.opacity)
-                        } else {
-                            VStack(spacing: 14) {
-                                Image(systemName: "photo.badge.plus").font(.system(size: 30, weight: .light))
-                                Text("Arrastra una imagen aquí").font(.system(size: 18, weight: .medium))
-                                Button("Elegir imagen…", action: model.choose).controlSize(.large)
-                            }.foregroundStyle(.secondary)
+    private func previewContent(_ image: NSImage, size: CGSize) -> some View {
+        ZStack {
+            Image(nsImage: image).resizable().interpolation(.high)
+                .frame(width: size.width, height: size.height)
+            if compare, canCompare, let original {
+                Image(nsImage: original).resizable().interpolation(.high)
+                    .frame(width: size.width, height: size.height)
+                    .mask(alignment: .leading) {
+                        Rectangle().frame(width: size.width * divider)
+                    }
+                Rectangle().fill(.white.opacity(0.85)).frame(width: 1.7)
+                    .shadow(color: .black.opacity(0.3), radius: 2)
+                    .position(x: size.width * divider, y: size.height / 2)
+                    .allowsHitTesting(false)
+                Circle().fill(.regularMaterial)
+                    .overlay(Image(systemName: "arrow.left.and.right").font(.system(size: 10, weight: .semibold)))
+                    .frame(width: 30, height: 30)
+                    .position(x: size.width * divider, y: size.height / 2)
+                    .allowsHitTesting(false)
+                Rectangle().fill(.clear).contentShape(Rectangle())
+                    .frame(width: 30, height: size.height)
+                    .position(x: size.width * divider, y: size.height / 2)
+                    .gesture(DragGesture(minimumDistance: 0).onChanged { value in
+                        divider = min(1, max(0, value.location.x / size.width + divider - 15 / size.width))
+                    })
+                Rectangle().fill(.clear).contentShape(Rectangle())
+                    .frame(width: size.width, height: size.height)
+                    .onTapGesture { location in
+                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.14)) {
+                            divider = min(1, max(0, location.x / size.width))
                         }
                     }
-                    .frame(width: model.preview == nil ? maxWidth : width, height: model.preview == nil ? maxHeight : height)
-                    .animation(animation, value: model.previewRevision)
-                    .animation(animation, value: model.aspect)
-                    .animation(animation, value: model.preview == nil)
-                }
-                if model.loading { ProgressView().controlSize(.small).padding(12).background(panel, in: Capsule()) }
-                if model.selected?.result != nil {
-                    VStack {
-                        HStack {
-                            Spacer()
-                            Button(model.showingResult ? "Resultado" : "Original") {
-                                model.showingResult.toggle(); model.refreshPreview()
-                            }.buttonStyle(.bordered).controlSize(.small).padding(12)
-                        }
-                        Spacer()
-                    }
-                }
+                    .zIndex(-1)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Rectangle())
-            .onTapGesture(count: 2, perform: model.choose)
-            .dropDestination(for: URL.self) { urls, _ in
-                guard urls.contains(where: \.isFileURL) else { return false }
-                model.add(urls); return true
-            } isTargeted: { targeted = $0 }
-            .accessibilityLabel("Vista previa. Arrastra imágenes o usa Abrir imagen.")
-            .accessibilityAction(named: "Elegir imagen", model.choose)
-        }.frame(minHeight: 260)
+        }
+        .clipped()
+    }
+
+    private var controls: some View {
+        HStack(spacing: 9) {
+            Picker("Tipo", selection: $model.mode) {
+                ForEach(ImageMode.allCases, id: \.self) { Text($0.title).tag($0) }
+            }.labelsHidden().frame(maxWidth: 160).disabled(model.running)
+            Picker("Escala", selection: $model.scale) {
+                ForEach([2,4,8,16], id: \.self) { Text("\($0)×").tag($0) }
+            }.labelsHidden().frame(width: 64).disabled(model.running)
+            Spacer(minLength: 0)
+            if canCompare {
+                Toggle(isOn: $compare) {
+                    Image(systemName: "square.split.2x1").accessibilityLabel("Comparar original y resultado")
+                }.toggleStyle(.button).help("Comparador")
+            }
+            Menu {
+                Button("Añadir…", action: model.choose)
+                Button(showQueue ? "Ocultar cola" : "Mostrar cola") { showQueue.toggle() }
+                Button("Ajustar a ventana") { resetZoom() }
+                Button("Ver al 100 %") {
+                    if let preview = model.preview {
+                        zoom = actualZoom(preview: preview, size: NSScreen.main?.visibleFrame.size ?? .init(width: 860, height: 600))
+                        model.actualSize = true
+                    }
+                }
+                Button("Reescalar de nuevo", action: model.reprocessSelected).disabled(model.running || model.selected == nil)
+                Button("Guardar todos…", action: model.saveAll).disabled(!model.hasResults || model.saving)
+                Button("Reintentar", action: model.retryFailed).disabled(model.running || model.items.isEmpty)
+                Divider()
+                Button("Limpiar sesión", action: model.reset).disabled(model.running || model.saving)
+            } label: { Image(systemName: "ellipsis").frame(width: 24) }
+                .menuStyle(.borderlessButton).accessibilityLabel("Más acciones")
+            if model.running {
+                Button("Cancelar", action: model.cancel)
+            } else if model.hasPending {
+                Button("Reescalar", action: model.start).modifier(PrimaryAction())
+                    .keyboardShortcut(.defaultAction).disabled(model.saving || model.loading)
+            } else if model.selected?.result != nil {
+                Button("Guardar", action: model.save).modifier(PrimaryAction()).disabled(model.saving)
+            } else {
+                Button("Reescalar", action: model.start).disabled(true)
+            }
+        }
+        .controlSize(.regular)
+        .padding(10)
+        .background {
+            if reduceTransparency { RoundedRectangle(cornerRadius: 18).fill(Color(nsColor: .windowBackgroundColor)) }
+            else { RoundedRectangle(cornerRadius: 18).fill(.regularMaterial) }
+        }
+    }
+
+    private var queue: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 9) {
+                ForEach(model.items) { item in
+                    Button { model.select(item.id) } label: {
+                        VStack(spacing: 4) {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 8).fill(.quaternary)
+                                if let thumb = NSImage(contentsOf: item.input) {
+                                    Image(nsImage: thumb).resizable().scaledToFill()
+                                        .frame(width: 62, height: 47).clipped()
+                                } else { Image(systemName: "photo").foregroundStyle(.secondary) }
+                            }
+                            .frame(width: 62, height: 47).clipShape(RoundedRectangle(cornerRadius: 8))
+                            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(
+                                item.id == model.selectedID ? Color.accentColor : .clear, lineWidth: 2))
+                            HStack(spacing: 3) {
+                                if item.result != nil { Image(systemName: "checkmark.circle.fill") }
+                                else if item.state == "En proceso" { Image(systemName: "hourglass") }
+                                Text(item.input.deletingPathExtension().lastPathComponent)
+                                    .lineLimit(1).frame(width: 48)
+                            }.font(.system(size: 9))
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .help(item.input.lastPathComponent + " · " + item.state)
+                    .accessibilityLabel(item.input.lastPathComponent + ", " + item.state)
+                }
+            }.padding(.horizontal, 16).padding(.vertical, 10)
+        }
+        .scrollIndicators(.hidden)
+        .frame(height: 87)
+        .background(.bar)
+    }
+
+    private func loadComparison() {
+        guard let selected = model.selected, let url = selected.result else { original = nil; return }
+        let token = UUID()
+        compareToken = token
+        Task.detached(priority: .userInitiated) {
+            let source = CGImageSourceCreateWithURL(selected.input as CFURL, nil)
+            let cg = source.flatMap {
+                CGImageSourceCreateThumbnailAtIndex($0, 0, [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 1800
+                ] as CFDictionary)
+            }
+            await MainActor.run {
+                guard compareToken == token, model.selected?.result == url else { return }
+                original = cg.map { NSImage(cgImage: $0, size: .zero) }
+            }
+        }
+    }
+    private func resetZoom() {
+        zoom = 1; gestureZoom = 1; model.actualSize = false
+    }
+    private func fit(image: NSImage, in bounds: CGSize) -> CGSize {
+        let w = max(1, image.size.width), h = max(1, image.size.height)
+        let scale = min(bounds.width / w, bounds.height / h)
+        return CGSize(width: w * scale, height: h * scale)
+    }
+    private func actualZoom(preview: NSImage, size: CGSize) -> CGFloat {
+        let fitted = fit(image: preview, in: size)
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        return max(1, (preview.size.width / scale) / max(1, fitted.width))
+    }
+}
+
+private struct MagnifyCompat: ViewModifier {
+    @Binding var zoom: CGFloat
+    @Binding var gestureZoom: CGFloat
+    func body(content: Content) -> some View {
+        content.gesture(MagnificationGesture().onChanged { gestureZoom = $0 }
+            .onEnded { value in
+                zoom = min(16, max(0.5, zoom * value))
+                gestureZoom = 1
+            })
+    }
+}
+private extension View {
+    func magnificationGestureCompat(zoom: Binding<CGFloat>, gestureZoom: Binding<CGFloat>) -> some View {
+        modifier(MagnifyCompat(zoom: zoom, gestureZoom: gestureZoom))
     }
 }
