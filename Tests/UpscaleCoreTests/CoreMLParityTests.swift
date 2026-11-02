@@ -38,9 +38,9 @@ final class CoreMLParityTests: XCTestCase {
                         continue
                     }
                     var pixelBuffer: CVPixelBuffer?
-                    let attrs: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:]]
+                    let attrs = [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary
                     XCTAssertEqual(CVPixelBufferCreate(kCFAllocatorDefault, inputSide, inputSide,
-                        kCVPixelFormatType_32BGRA, attrs as CFDictionary, &pixelBuffer), kCVReturnSuccess)
+                        kCVPixelFormatType_32BGRA, attrs, &pixelBuffer), kCVReturnSuccess)
                     let buffer = try XCTUnwrap(pixelBuffer)
                     context.render(image, to: buffer,
                                    bounds: CGRect(x: 0, y: 0, width: inputSide, height: inputSide),
