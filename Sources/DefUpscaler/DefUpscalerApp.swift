@@ -34,7 +34,13 @@ struct DefUpscalerApp: App {
         Window("DefUpscaler", id: "main") {
             ContentView(model: model)
                 .preferredColorScheme(appearance == "dark" ? .dark : appearance == "light" ? .light : nil)
-                .onAppear { delegate.model = model }
+                .onAppear {
+                    delegate.model = model
+                    if let index = CommandLine.arguments.firstIndex(of: "--preview-fixture"),
+                       CommandLine.arguments.indices.contains(index + 1), model.items.isEmpty {
+                        model.add([URL(fileURLWithPath: CommandLine.arguments[index + 1])])
+                    }
+                }
         }
         .defaultSize(width: 640, height: 570)
         .windowResizability(.contentMinSize)
@@ -146,7 +152,7 @@ struct ContentView: View {
             }
             if model.metadata != nil {
                 HStack {
-                    Text(model.dimensions).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                    Text(model.dimensions).font(.system(.caption, design: .monospaced)).textSelection(.enabled).help(model.estimatedMemory)
                     Spacer()
                     if model.scale > 4 { Text("IA 4× + interpolación").font(.caption) }
                     else if model.actualSize { Text("100 %").font(.system(.caption, design: .monospaced)) }
@@ -182,11 +188,11 @@ struct ContentView: View {
             let width = min(maxWidth, maxHeight * model.aspect)
             let height = width / model.aspect
             ZStack {
-                if model.actualSize, let preview = model.preview, let metadata = model.metadata {
+                if model.actualSize, let preview = model.preview, model.metadata != nil {
                     ScrollView([.horizontal, .vertical]) {
                         Image(nsImage: preview).resizable().interpolation(.none)
-                            .frame(width: CGFloat(metadata.width) / (NSScreen.main?.backingScaleFactor ?? 2),
-                                   height: CGFloat(metadata.height) / (NSScreen.main?.backingScaleFactor ?? 2))
+                            .frame(width: model.pixelViewSize.width / (NSScreen.main?.backingScaleFactor ?? 2),
+                                   height: model.pixelViewSize.height / (NSScreen.main?.backingScaleFactor ?? 2))
                     }.background(panel).clipShape(RoundedRectangle(cornerRadius: 16))
                 } else {
                     ZStack {
@@ -195,7 +201,7 @@ struct ContentView: View {
                             .strokeBorder(targeted ? accent : Color.primary.opacity(0.13), style: StrokeStyle(lineWidth: 1, dash: model.preview == nil ? [5, 5] : []))
                         if let preview = model.preview {
                             Image(nsImage: preview).resizable().scaledToFit().padding(6)
-                                .transition(.opacity)
+                                .id(model.previewRevision).transition(.opacity)
                         } else {
                             VStack(spacing: 14) {
                                 Image(systemName: "photo.badge.plus").font(.system(size: 30, weight: .light))
@@ -205,10 +211,11 @@ struct ContentView: View {
                         }
                     }
                     .frame(width: model.preview == nil ? maxWidth : width, height: model.preview == nil ? maxHeight : height)
+                    .animation(animation, value: model.previewRevision)
                     .animation(animation, value: model.aspect)
                     .animation(animation, value: model.preview == nil)
                 }
-                if model.loading { ProgressView().controlSize(.small).padding(12).background(.regularMaterial, in: Capsule()) }
+                if model.loading { ProgressView().controlSize(.small).padding(12).background(panel, in: Capsule()) }
                 if model.selected?.result != nil {
                     VStack {
                         HStack {

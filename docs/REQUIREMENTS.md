@@ -22,4 +22,4 @@
 
 Additional details: last selection wins; serial preview decoding; fit/100% modes; original/result toggle; loading/upscaling/encoding/saving phases; unsaved-result confirmation on reset/quit; original file overwrite blocked; failed export preserves temporary results; batch collisions get numeric suffixes. Images added during processing join the current queue with that run's captured mode/scale.
 
-The 100% view shows each selected image's actual pixels rather than aligning a source pixel to its scaled result. Fit view keeps equivalent framing for comparison. There is no automatic whole-window resize, deliberately avoiding disruptive movement. These decisions favor a predictable lightweight utility.
+The100% comparison uses output pixel dimensions for both original and result, keeping the same scale/scroll framing. Standalone original view uses its actual pixels. Fit view keeps equivalent framing. There is no automatic whole-window resize, deliberately avoiding disruptive movement. These decisions favor a predictable lightweight utility.

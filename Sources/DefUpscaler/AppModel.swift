@@ -44,6 +44,7 @@ final class AppModel: ObservableObject {
     @Published var selectedID: UUID?
     @Published var preview: NSImage?
     @Published var metadata: ImageMetadata?
+    @Published var previewRevision = UUID()
     @Published var scale = 4
     @Published var mode: ImageMode = .illustration
     @Published var running = false
@@ -65,6 +66,17 @@ final class AppModel: ObservableObject {
     var hasPending: Bool { items.contains { $0.state == "Pendiente" } }
     var hasResults: Bool { items.contains { $0.result != nil } }
     var aspect: Double { metadata?.aspectRatio ?? 1.4 }
+    var pixelViewSize: CGSize {
+        guard let metadata else { return .zero }
+        let multiplier = !showingResult && selected?.result != nil ? selected?.outputScale ?? 1 : 1
+        return CGSize(width: metadata.width * multiplier, height: metadata.height * multiplier)
+    }
+    var estimatedMemory: String {
+        guard let metadata else { return "" }
+        let multiplier = showingResult && selected?.result != nil ? 1 : scale
+        let bytes = Int64(metadata.width) * Int64(metadata.height) * Int64(multiplier * multiplier) * 24 + 768 * 1024 * 1024
+        return "Presupuesto estimado: " + ByteCountFormatter.string(fromByteCount: bytes, countStyle: .memory) + ". No es una medición del pico real."
+    }
     var dimensions: String {
         guard let metadata else { return "" }
         if showingResult, selected?.result != nil { return "\(metadata.width) × \(metadata.height)" }
@@ -101,6 +113,12 @@ final class AppModel: ObservableObject {
                 // Keep the old image visible until its replacement is decoded.
                 preview = NSImage(cgImage: loaded.image, size: .zero)
                 metadata = loaded.metadata
+                previewRevision = UUID()
+                if loaded.metadata.depth > 8 {
+                    message = UpscaleError.unsupportedColor.localizedDescription
+                } else if url.pathExtension.lowercased() == "heic" {
+                    message = "Salida SDR sRGB. Si la imagen tiene HDR, no se conservará esa mejora."
+                }
             } catch is CancellationError {} catch {
                 guard generation == token else { return }
                 message = error.localizedDescription

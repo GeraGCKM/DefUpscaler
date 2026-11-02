@@ -4,7 +4,7 @@ A small native macOS app for **drop → choose mode and scale → upscale → sa
 
 ## Download and install
 
-Download the ZIP from [Releases](https://github.com/GeraGCKM/DefUpscaler/releases), or the artifact of a successful [macOS app run](https://github.com/GeraGCKM/DefUpscaler/actions). Unzip and drag `DefUpscaler.app` into Applications. Development builds are ad-hoc signed, not Developer ID signed/notarized. First launch may require approval under System Settings → Privacy & Security; do not disable Gatekeeper. Homebrew and production signing are planned for 1.0.
+Download the ZIP from the artifact of a successful [macOS app run](https://github.com/GeraGCKM/DefUpscaler/actions). Unzip and drag `DefUpscaler.app` into Applications. Development builds are ad-hoc signed, not Developer ID signed/notarized. First launch may require approval under System Settings → Privacy & Security; do not disable Gatekeeper. Homebrew and production signing are planned for 1.0.
 
 ## Use
 

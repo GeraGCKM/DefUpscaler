@@ -5,7 +5,7 @@ on:
   pull_request:
   workflow_dispatch:
 permissions:
-  contents: write
+  contents: read
 concurrency:
   group: macos-${{ github.ref }}
   cancel-in-progress: true
@@ -40,6 +40,8 @@ jobs:
           DEFUPSCALER_TEST_MODEL="$PWD/build/models/Anime4x.mlmodelc" DEFUPSCALER_PHOTO_MODEL="$PWD/build/models/Photo4x.mlmodelc" swift test --filter EngineIntegrationTests
       - name: Package application
         run: bash scripts/package.sh
+      - name: Launch and capture native UI
+        run: bash scripts/capture-ui.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: DefUpscaler-macOS-AppleSilicon
@@ -47,13 +49,6 @@ jobs:
             build/DefUpscaler-macOS-AppleSilicon.zip
             build/SHA256SUMS.txt
             build/models/model-provenance.json
+            build/screenshots/
           if-no-files-found: error
           retention-days: 14
-      - name: Publish 0.2 prerelease
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if ! gh release view v0.2.0 >/dev/null 2>&1; then
-            gh release create v0.2.0 build/DefUpscaler-macOS-AppleSilicon.zip build/SHA256SUMS.txt build/models/model-provenance.json --target "$GITHUB_SHA" --title 'DefUpscaler 0.2.0 — Adaptive native preview' --notes-file CHANGELOG.md --prerelease
-          fi
