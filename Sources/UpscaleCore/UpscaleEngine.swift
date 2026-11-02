@@ -96,12 +96,12 @@ public actor UpscaleEngine {
                     context.render(patch, to: buffer, bounds: CGRect(x: 0, y: 0, width: side, height: side), colorSpace: colorSpace)
                     let features = try MLDictionaryFeatureProvider(dictionary: ["input": MLFeatureValue(pixelBuffer: buffer)])
                     let prediction = try model.prediction(from: features)
-                    guard let output = prediction.featureValue(for: "output")?.imageBufferValue,
-                        CVPixelBufferGetWidth(output) == side * 4, CVPixelBufferGetHeight(output) == side * 4 else {
+                    guard let array = prediction.featureValue(for: "output")?.multiArrayValue else {
                         throw UpscaleError.invalidPrediction
                     }
+                    let output = try TensorImage.make(array, side: side * 4, colorSpace: colorSpace)
                     // Resample with context still present, then crop; avoids independent hard-edge resampling.
-                    let resized = CIImage(cvPixelBuffer: output).applyingFilter("CILanczosScaleTransform", parameters: [
+                    let resized = CIImage(cgImage: output).applyingFilter("CILanczosScaleTransform", parameters: [
                         kCIInputScaleKey: Double(scale) / 4, kCIInputAspectRatioKey: 1.0
                     ]).transformed(by: .init(translationX: CGFloat((x - JobPlan.padding) * scale), y: CGFloat((y - JobPlan.padding) * scale)))
                     let rect = CGRect(x: x * scale, y: y * scale, width: width * scale, height: rowHeight * scale)

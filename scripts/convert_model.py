@@ -86,7 +86,7 @@ def convert(name, filename, url, digest_expected, blocks):
         traced = torch.jit.trace(wrapper, example)
     model = ct.convert(
         traced, inputs=[ct.ImageType(name="input", shape=ct.EnumeratedShapes(shapes=[(1, 3, n, n) for n in [96, 160, 224]], default=(1, 3, 96, 96)), scale=1 / 255)],
-        outputs=[ct.ImageType(name="output", color_layout=ct.colorlayout.RGB)],
+        outputs=[ct.TensorType(name="output", dtype=np.float32)],
         minimum_deployment_target=ct.target.macOS14,
         compute_precision=ct.precision.FLOAT16,
     )
@@ -101,7 +101,7 @@ def convert(name, filename, url, digest_expected, blocks):
         tensor = torch.from_numpy(pixels.copy()).permute(2, 0, 1).unsqueeze(0).float() / 255
         with torch.no_grad():
             expected = wrapper(tensor).squeeze(0).permute(1, 2, 0).numpy()
-        actual = np.asarray(model.predict({"input": Image.fromarray(pixels)})["output"].convert("RGB"), dtype=np.float32)
+        actual = np.asarray(model.predict({"input": Image.fromarray(pixels)})["output"], dtype=np.float32).squeeze(0).transpose(1, 2, 0)
         mae = float(np.abs(expected - actual).mean())
         if not np.isfinite(mae) or mae > 2.0:
             raise RuntimeError(f"Core ML parity failed: MAE={mae:.4f}/255")
