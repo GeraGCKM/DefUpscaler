@@ -1,15 +1,29 @@
-# Architecture and scope
+# Architecture — 0.2
 
-SwiftUI/AppKit is the native shell. Core ML handles a single bundled, converted Real-ESRGAN anime model. No Electron, web server, Python runtime, package manager, or third-party Swift dependency ships to the user.
+## Boundaries
 
-A single main window owns an AppModel. The model invokes a serial UpscaleEngine actor. Decoding/inference/encoding are off the main actor. Preview decoding is bounded to 900px. Immutable JobPlan validates metadata before decoding, limits output to 64 megapixels and estimates buffers against one third of physical RAM. This is a conservative guard, not a measured working-set guarantee.
+AppModel owns main-actor UI/queue state. PreviewLoader serializes off-main thumbnail/full-view decoding, cancellation and generation checks prevent stale previews. UpscaleEngine is an actor with an explicit busy guard (actor reentrancy alone is not a job lock). Core ML inference, decoding and encoding are off MainActor. Exports run at utility priority using mapped reads and atomic writes. AppKit provides file panels, termination confirmation and window material; SwiftUI provides controls, animations and Liquid Glass.
 
-128px core tiles have 16px surrounding context; the fixed model input is 160×160 and output 640×640. Borders clamp to edge pixels. One prediction is active at a time; intermediate Core Image caches are disabled and autoreleased each tile. The app yields between tiles, slows under serious thermal state and pauses under critical state. Gentle mode inserts an 80ms delay per tile. It does not enforce a fictional 80% GPU cap. Benchmark before tuning tile size, overlap, compute units or pacing.
+No external Swift dependencies. No runtime downloads. Only the selected model is loaded, and it is released after the job. Results remain in the queue until saved/discarded. File paths are private in diagnostic errors.
 
-The initial build deliberately ships one illustration model. Add a photo model only after conversion, license and quality validation; do not label this model universal. Core ML uses the scheduler's available CPU/GPU/Neural Engine resources; `.all` is permission, not proof that every operator runs on the Neural Engine.
+## Memory and adaptation
 
-Model provenance is generated during conversion: upstream source URL, SHA-256, tool versions and numerical error against PyTorch on deterministic inputs. The upstream release URL and SHA-256 are pinned; the initial digest was measured from the official release asset. A mismatch stops conversion before loading weights. Strict `weights_only` loading and state-key validation avoid executing serialized Python from weights. CI actions are pinned by commit. Changes to weights or action pins require review.
+ImageInspector checks dimensions/bit depth before full decoding. JobPlan enforces scale/dimension/output-pixel limits and a physical-memory estimate. A live free+inactive-page estimate adds a conservative preflight check; it is approximate, not a promise of allocatable memory. Dispatch pressure events are the authoritative pressure signal. Critical pressure cancels; memory warnings and thermal fair/serious states shrink subsequent rows.
 
-Aesthetic: system SF font, system window controls, 24pt margins, 16pt continuous rounded drop area, neutral system colors, one accent and no custom bundled fonts. Inspired by Antinote's simplicity, not a claim to reproduce its unpublished font/radius values.
+ResourceGovernor starts with core64, grows to128/192 after six stable rows, and compares seconds per input pixel. A >50% regression backs off with a cooldown. Tile changes happen at row boundaries, preserving complete nonoverlapping coverage. There is one prediction at a time, no speculative parallel allocations. Under normal conditions the engine only yields; it does not sleep. At constrained core64, a 30ms distress delay reduces duty cycle; thermal-critical pauses check cancellation every500ms. This is feedback-driven block sizing plus emergency pacing, not a utilization controller.
 
-Future iPhone: reuse geometry and Core ML processing, replace AppKit dialogs/previews with PhotosPicker/Files, add lifecycle handling and lower limits. Future Windows full Rust: separate Rust UI and Burn/wgpu-compatible model importer; reuse model weights, test fixtures and contracts. It is a separate validated implementation, not a compilation flag for SwiftUI.
+Available memory alone does not establish CPU/GPU contention. The governor is a conservative heuristic, not a validated 70–80% hardware budget. M5 headroom and energy efficiency must be measured alongside real browsing before tuning thresholds.
+
+## Images
+
+Core ML accepts enumerated 96/160/224 RGB patches. Each has16px context around a64/128/192 core. Borders clamp. RGB is unpremultiplied before inference; alpha is independently resampled and restored with Core Image. The sRGB working/output space makes the SDR contract explicit. Resizing occurs before cropping context to reduce independent-resampling seams. 8×/16× are model4× plus Lanczos;2× is model4× downsampled. Output limits apply to final dimensions.
+
+Greater-than8-bit sources are rejected. HEIC gain-map enhancement is not processed; SDR base input may be accepted. HDR/wide-gamut preservation and metadata round-tripping are not claimed. Every output embeds an sRGB image color space. The alpha edge test catches accidental white flattening; visual halo/seam assessment on complex artwork remains necessary.
+
+## Design
+
+SF system font; monospaced numbers; warm near-white and graphite neutrals, quiet blue accent. A subdued native behind-window material; neutral solid image surface. Liquid Glass uses Apple's glassProminent button style on macOS26+, with bordered fallback. Reduce Transparency bypasses glass/material decoration where provided; Reduce Motion removes geometry animations. The window stays under user size control; only the preview surface adapts to the aspect ratio. Animations are interruptible SwiftUI transitions. Pixel100 view uses screen backing scale; fit view never deforms the image.
+
+## Distribution
+
+ZIP remains the deliverable.0.2 is a prerelease. Homebrew, Developer ID/notarization and full release hardening are1.0 tasks. iPhone and Windows/Rust are separate future ports, not included in0.2.

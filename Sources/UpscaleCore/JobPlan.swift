@@ -1,9 +1,11 @@
 import Foundation
 
 public enum UpscaleError: LocalizedError {
-    case invalidImage, tooLarge, missingModel, invalidPrediction, memoryPressure
+    case invalidImage, tooLarge, missingModel, invalidPrediction, memoryPressure, unsupportedColor, busy
     public var errorDescription: String? {
         switch self {
+        case .unsupportedColor: return "Esta versión exporta SDR sRGB de 8 bits. Convierte primero la imagen HDR o de alta profundidad a SDR."
+        case .busy: return "Ya hay una imagen en proceso."
         case .invalidImage: return "No se pudo leer la imagen. Usa PNG, JPEG, HEIC o TIFF."
         case .tooLarge: return "La imagen excede el límite de memoria. Prueba 2× o una imagen más pequeña."
         case .missingModel: return "Falta el modelo incluido. Vuelve a instalar la compilación completa de DefUpscaler."
@@ -32,7 +34,7 @@ public struct JobPlan: Sendable {
     public var outputHeight: Int { height * scale }
 
     public init(width: Int, height: Int, scale: Int, memoryBytes: UInt64) throws {
-        guard width > 0, height > 0, [2, 4].contains(scale), width <= 32768, height <= 32768 else {
+        guard width > 0, height > 0, [2, 4, 8, 16].contains(scale), width <= 32768, height <= 32768 else {
             throw UpscaleError.tooLarge
         }
         let outputPixels = UInt64(width) * UInt64(height) * UInt64(scale * scale)

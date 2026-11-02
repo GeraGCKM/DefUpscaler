@@ -18,7 +18,7 @@ final class JobPlanTests: XCTestCase {
         XCTAssertEqual(plan.outputHeight, 532)
     }
     func testRejectsInvalidAndExcessiveDimensionsBeforeAllocation() {
-        for (width, height, scale) in [(0, 10, 4), (-1, 10, 4), (10, 10, 16), (Int.max, 10, 4), (10000, 10000, 4)] {
+        for (width, height, scale) in [(0, 10, 4), (-1, 10, 4), (10, 10, 3), (Int.max, 10, 4), (10000, 10000, 4)] {
             XCTAssertThrowsError(try JobPlan(width: width, height: height, scale: scale, memoryBytes: .max))
         }
         XCTAssertThrowsError(try JobPlan(width: 2000, height: 2000, scale: 4, memoryBytes: 4 * 1024 * 1024 * 1024))

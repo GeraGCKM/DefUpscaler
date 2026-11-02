@@ -1,6 +1,6 @@
 # Third-party notices
 
-Bundled model: RealESRGAN_x4plus_anime_6B, by Xintao Wang and contributors.
+Bundled models: RealESRGAN_x4plus_anime_6B and RealESRGAN_x4plus, by Xintao Wang and contributors.
 Source: https://github.com/xinntao/Real-ESRGAN
 The build-time RRDB implementation follows the published Real-ESRGAN / BasicSR architecture and loads the original weights without training.
 

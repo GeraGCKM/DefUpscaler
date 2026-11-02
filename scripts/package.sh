@@ -14,7 +14,9 @@ APP="$PWD/build/DefUpscaler.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/DefUpscaler "$APP/Contents/MacOS/"
 cp packaging/Info.plist "$APP/Contents/Info.plist"
-xcrun coremlcompiler compile build/models/Anime4x.mlpackage "$APP/Contents/Resources"
+for model in Anime4x Photo4x; do
+    xcrun coremlcompiler compile "build/models/$model.mlpackage" "$APP/Contents/Resources"
+done
 cp THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
 cp build/models/model-provenance.json "$APP/Contents/Resources/"
 codesign --force --deep --sign - "$APP"

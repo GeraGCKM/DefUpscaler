@@ -5,13 +5,13 @@ on:
   pull_request:
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 concurrency:
   group: macos-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -34,8 +34,10 @@ jobs:
         run: python scripts/convert_model.py
       - name: End-to-end Core ML image test
         run: |
-          xcrun coremlcompiler compile build/models/Anime4x.mlpackage build/models
-          DEFUPSCALER_TEST_MODEL="$PWD/build/models/Anime4x.mlmodelc" swift test --filter EngineIntegrationTests
+          for model in Anime4x Photo4x; do
+            xcrun coremlcompiler compile "build/models/$model.mlpackage" build/models
+          done
+          DEFUPSCALER_TEST_MODEL="$PWD/build/models/Anime4x.mlmodelc" DEFUPSCALER_PHOTO_MODEL="$PWD/build/models/Photo4x.mlmodelc" swift test --filter EngineIntegrationTests
       - name: Package application
         run: bash scripts/package.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -47,3 +49,11 @@ jobs:
             build/models/model-provenance.json
           if-no-files-found: error
           retention-days: 14
+      - name: Publish 0.2 prerelease
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view v0.2.0 >/dev/null 2>&1; then
+            gh release create v0.2.0 build/DefUpscaler-macOS-AppleSilicon.zip build/SHA256SUMS.txt build/models/model-provenance.json --target "$GITHUB_SHA" --title 'DefUpscaler 0.2.0 — Adaptive native preview' --notes-file CHANGELOG.md --prerelease
+          fi

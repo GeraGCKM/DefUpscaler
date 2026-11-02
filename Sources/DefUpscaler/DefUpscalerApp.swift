@@ -1,14 +1,26 @@
 import SwiftUI
 import AppKit
+import UpscaleCore
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    var model: AppModel?
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
-    func applicationWillTerminate(_ notification: Notification) {
-        Self.removeTemporaryResults()
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if model?.saving == true { return .terminateCancel }
+        if model?.running == true {
+            let alert = NSAlert()
+            alert.messageText = "¿Cancelar el procesamiento y salir?"
+            alert.addButton(withTitle: "Continuar trabajando")
+            alert.addButton(withTitle: "Salir")
+            guard alert.runModal() == .alertSecondButtonReturn else { return .terminateCancel }
+        }
+        guard model?.confirmDiscard() != false else { return .terminateCancel }
+        model?.cancel()
+        return .terminateNow
     }
+    func applicationWillTerminate(_ notification: Notification) { Self.removeTemporaryResults() }
     static func removeTemporaryResults() {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("DefUpscaler", isDirectory: true)
-        try? FileManager.default.removeItem(at: directory)
+        try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory.appendingPathComponent("DefUpscaler", isDirectory: true))
     }
 }
 
@@ -16,99 +28,208 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct DefUpscalerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var model = AppModel()
-
+    @AppStorage("appearance") private var appearance = "system"
     init() { AppDelegate.removeTemporaryResults() }
-
     var body: some Scene {
         Window("DefUpscaler", id: "main") {
             ContentView(model: model)
+                .preferredColorScheme(appearance == "dark" ? .dark : appearance == "light" ? .light : nil)
+                .onAppear { delegate.model = model }
         }
-        .defaultSize(width: 580, height: 620)
+        .defaultSize(width: 640, height: 570)
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("Abrir imagen…", action: model.choose).keyboardShortcut("o").disabled(model.running)
-                Button("Guardar resultado…", action: model.save).keyboardShortcut("s").disabled(model.resultPreview == nil)
+                Button("Añadir imágenes…", action: model.choose).keyboardShortcut("o")
+                Button("Guardar resultado…", action: model.save).keyboardShortcut("s").disabled(model.selected?.result == nil || model.saving)
             }
         }
+        Settings {
+            Form {
+                Picker("Apariencia", selection: $appearance) {
+                    Text("Sistema").tag("system")
+                    Text("Clara").tag("light")
+                    Text("Oscura").tag("dark")
+                }
+                Text("Salida: PNG SDR sRGB de 8 bits, con transparencia. HDR no se conserva. Las imágenes de más de 8 bits se rechazan; HEIC con mapa HDR usa su imagen base SDR.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }.padding(24).frame(width: 400)
+        }
+    }
+}
+
+struct WindowMaterial: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .sidebar
+        view.blendingMode = .behindWindow
+        view.state = .followsWindowActiveState
+        return view
+    }
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+}
+
+struct PrimaryAction: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(macOS 26, *), !reduceTransparency {
+            content.buttonStyle(.glassProminent)
+        } else { content.buttonStyle(.borderedProminent) }
     }
 }
 
 struct ContentView: View {
     @ObservedObject var model: AppModel
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var targeted = false
+    private var background: Color { scheme == .dark ? Color(red: 0.105, green: 0.115, blue: 0.13) : Color(red: 0.955, green: 0.955, blue: 0.945) }
+    private var panel: Color { scheme == .dark ? Color(red: 0.145, green: 0.155, blue: 0.17) : Color(red: 0.99, green: 0.99, blue: 0.98) }
+    private var accent: Color { scheme == .dark ? Color(red: 0.48, green: 0.64, blue: 0.79) : Color(red: 0.27, green: 0.43, blue: 0.59) }
+    private var animation: Animation? { reduceMotion ? nil : .smooth(duration: 0.25) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("DefUpscaler").font(.headline)
-                Spacer()
-                Text("Local · Anime 4×").font(.caption).foregroundStyle(.secondary)
-            }
-            ZStack {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.primary.opacity(targeted ? 0.08 : 0.035))
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.12), style: StrokeStyle(lineWidth: 1, dash: model.preview == nil ? [5] : []))
-                if let preview = (model.showingResult ? model.resultPreview : nil) ?? model.preview {
-                    Image(nsImage: preview).resizable().scaledToFit().padding(12)
-                } else {
-                    VStack(spacing: 12) {
-                        Image(systemName: "photo.badge.plus").font(.system(size: 30, weight: .light))
-                        Text("Arrastra una imagen aquí").font(.system(size: 18))
-                        Button("Elegir imagen…", action: model.choose)
-                    }
-                    .foregroundStyle(.secondary)
+        VStack(spacing: 14) {
+            previewArea
+            if model.items.count > 1 {
+                HStack(spacing: 10) {
+                    Picker("Cola", selection: Binding(get: { model.selectedID }, set: { if let id = $0 { model.select(id) } })) {
+                        ForEach(model.items) { item in
+                            Text("\(item.input.lastPathComponent) · \(item.state)").tag(Optional(item.id))
+                        }
+                    }.labelsHidden().accessibilityLabel("Imagen seleccionada de la cola")
+                    Text("\(model.items.count) imágenes").font(.caption).foregroundStyle(.secondary)
                 }
             }
-            .frame(minHeight: 280, maxHeight: .infinity)
-            .dropDestination(for: URL.self) { urls, _ in
-                guard let url = urls.first, url.isFileURL, !model.running else { return false }
-                model.load(url)
-                return true
-            } isTargeted: { targeted = $0 }
-            .accessibilityLabel("Imagen de entrada y vista previa")
-
-            HStack {
+            HStack(spacing: 10) {
+                Picker("Tipo", selection: $model.mode) {
+                    ForEach(ImageMode.allCases, id: \.self) { Text($0.title).tag($0) }
+                }.labelsHidden().frame(maxWidth: 180).disabled(model.running)
                 Picker("Escala", selection: $model.scale) {
-                    Text("2×").tag(2)
-                    Text("4×").tag(4)
-                }.pickerStyle(.segmented).frame(width: 130).disabled(model.running)
-                Spacer()
-                Toggle("Modo tranquilo", isOn: $model.gentle).toggleStyle(.checkbox).disabled(model.running)
-                    .help("Añade pausas entre bloques. No fija un porcentaje de CPU o GPU.")
-            }
-            Text("Para ilustración y anime · PNG de salida · Transparencia sobre blanco")
-                .font(.caption).foregroundStyle(.secondary)
-            if model.running {
-                ProgressView(value: model.progress)
-                Text("\(Int(model.progress * 100)) % · Cancelación entre bloques")
-                    .font(.caption).monospacedDigit().foregroundStyle(.secondary)
-            }
-            if let message = model.message {
-                Text(message).font(.callout).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-            }
-            HStack {
-                Button("Otra imagen…", action: model.choose).disabled(model.running)
-                if model.resultPreview != nil {
-                    Toggle("Resultado", isOn: $model.showingResult).toggleStyle(.button)
-                }
-                Spacer()
+                    ForEach([2, 4, 8, 16], id: \.self) { Text("\($0)×").tag($0) }
+                }.labelsHidden().frame(width: 68).disabled(model.running)
+                Spacer(minLength: 4)
+                Menu {
+                    Button("Añadir imágenes…", action: model.choose)
+                    if model.selected?.result != nil {
+                        Button(model.showingResult ? "Ver original" : "Ver resultado") {
+                            model.showingResult.toggle(); model.refreshPreview()
+                        }
+                    }
+                    Button(model.actualSize ? "Ajustar a ventana" : "Ver al 100 %") {
+                        model.actualSize.toggle(); model.refreshPreview()
+                    }.disabled(model.preview == nil)
+                    Button("Guardar todos…", action: model.saveAll).disabled(!model.hasResults || model.saving)
+                    Button("Reintentar pendientes o fallidos", action: model.retryFailed).disabled(model.running || model.items.isEmpty)
+                    Divider()
+                    Button("Borrar sesión y temporales", action: model.reset).disabled(model.running || model.saving)
+                    SettingsLink { Text("Ajustes…") }
+                } label: { Image(systemName: "ellipsis") }
+                .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Más opciones")
                 if model.running {
                     Button("Cancelar", action: model.cancel).keyboardShortcut(.cancelAction)
-                } else if model.resultPreview != nil {
-                    Button("Guardar…", action: model.save).buttonStyle(.borderedProminent)
-                    Button("Repetir", action: model.start)
+                } else if model.hasPending {
+                    Button("Reescalar", action: model.start).modifier(PrimaryAction()).keyboardShortcut(.defaultAction)
+                        .disabled(model.saving || model.loading)
+                } else if model.selected?.result != nil {
+                    Button("Guardar…", action: model.save).modifier(PrimaryAction()).disabled(model.saving)
                 } else {
-                    Button("Mejorar", action: model.start).buttonStyle(.borderedProminent).disabled(model.input == nil)
-                        .keyboardShortcut(.defaultAction)
+                    Button("Reescalar", action: model.start).modifier(PrimaryAction()).disabled(true)
                 }
             }
-            Button("Borrar sesión y temporales", action: model.reset)
-                .buttonStyle(.link).font(.caption).disabled(model.running)
+            .controlSize(.large)
+            .padding(12)
+            .background {
+                if reduceTransparency { RoundedRectangle(cornerRadius: 16).fill(panel) }
+                else { RoundedRectangle(cornerRadius: 16).fill(.thinMaterial) }
+            }
+            if model.metadata != nil {
+                HStack {
+                    Text(model.dimensions).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                    Spacer()
+                    if model.scale > 4 { Text("IA 4× + interpolación").font(.caption) }
+                    else if model.actualSize { Text("100 %").font(.system(.caption, design: .monospaced)) }
+                }.foregroundStyle(.secondary)
+            }
+            if model.running {
+                ProgressView(value: model.progress)
+                HStack {
+                    Text(model.phase)
+                    Spacer()
+                    Text("\(Int(model.progress * 100)) %").monospacedDigit()
+                }.font(.caption).foregroundStyle(.secondary)
+            } else if model.saving { ProgressView("Guardando…").controlSize(.small) }
+            if let message = model.message {
+                Text(message).font(.callout).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
-        .padding(24)
-        .frame(minWidth: 500, minHeight: 560)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .padding(20)
+        .frame(minWidth: 520, minHeight: 460)
+        .tint(accent)
+        .background {
+            ZStack {
+                if !reduceTransparency { WindowMaterial() }
+                background.opacity(reduceTransparency ? 1 : 0.91)
+            }.ignoresSafeArea()
+        }
+    }
+
+    private var previewArea: some View {
+        GeometryReader { geometry in
+            let maxWidth = max(1, geometry.size.width - 12)
+            let maxHeight = max(1, geometry.size.height - 12)
+            let width = min(maxWidth, maxHeight * model.aspect)
+            let height = width / model.aspect
+            ZStack {
+                if model.actualSize, let preview = model.preview, let metadata = model.metadata {
+                    ScrollView([.horizontal, .vertical]) {
+                        Image(nsImage: preview).resizable().interpolation(.none)
+                            .frame(width: CGFloat(metadata.width) / (NSScreen.main?.backingScaleFactor ?? 2),
+                                   height: CGFloat(metadata.height) / (NSScreen.main?.backingScaleFactor ?? 2))
+                    }.background(panel).clipShape(RoundedRectangle(cornerRadius: 16))
+                } else {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous).fill(panel)
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(targeted ? accent : Color.primary.opacity(0.13), style: StrokeStyle(lineWidth: 1, dash: model.preview == nil ? [5, 5] : []))
+                        if let preview = model.preview {
+                            Image(nsImage: preview).resizable().scaledToFit().padding(6)
+                                .transition(.opacity)
+                        } else {
+                            VStack(spacing: 14) {
+                                Image(systemName: "photo.badge.plus").font(.system(size: 30, weight: .light))
+                                Text("Arrastra una imagen aquí").font(.system(size: 18, weight: .medium))
+                                Button("Elegir imagen…", action: model.choose).controlSize(.large)
+                            }.foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(width: model.preview == nil ? maxWidth : width, height: model.preview == nil ? maxHeight : height)
+                    .animation(animation, value: model.aspect)
+                    .animation(animation, value: model.preview == nil)
+                }
+                if model.loading { ProgressView().controlSize(.small).padding(12).background(.regularMaterial, in: Capsule()) }
+                if model.selected?.result != nil {
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Button(model.showingResult ? "Resultado" : "Original") {
+                                model.showingResult.toggle(); model.refreshPreview()
+                            }.buttonStyle(.bordered).controlSize(.small).padding(12)
+                        }
+                        Spacer()
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2, perform: model.choose)
+            .dropDestination(for: URL.self) { urls, _ in
+                guard urls.contains(where: \.isFileURL) else { return false }
+                model.add(urls); return true
+            } isTargeted: { targeted = $0 }
+            .accessibilityLabel("Vista previa. Arrastra imágenes o usa Abrir imagen.")
+            .accessibilityAction(named: "Elegir imagen", model.choose)
+        }.frame(minHeight: 260)
     }
 }
