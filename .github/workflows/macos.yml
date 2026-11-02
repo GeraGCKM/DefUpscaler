@@ -32,6 +32,12 @@ jobs:
         run: python -m pip install -r scripts/requirements-model.txt
       - name: Convert and validate model
         run: python scripts/convert_model.py
+      - name: PROVISIONAL - Native Core ML/PyTorch numerical parity
+        run: |
+          for model in build/models/*.mlpackage; do
+            xcrun coremlcompiler compile "$model" build/models
+          done
+          DEFUPSCALER_TEST_MODEL="$PWD/build/models/Anime4x.mlmodelc" DEFUPSCALER_PHOTO_MODEL="$PWD/build/models/Photo4x.mlmodelc" DEFUPSCALER_PARITY_DIR="$PWD/build/models/parity" swift test --filter CoreMLParityTests
       - name: End-to-end Core ML image test
         run: |
           for model in build/models/*.mlpackage; do
