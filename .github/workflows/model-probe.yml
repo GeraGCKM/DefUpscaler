@@ -1,6 +1,9 @@
 name: Probe optional RealPLKSR model
 on:
   workflow_dispatch:
+  push:
+    branches: ['codex/defupscaler-0.3-provisional']
+    paths: ['.github/workflows/model-probe.yml', 'scripts/probe_realplksr.py']
 permissions:
   contents: read
 jobs:
