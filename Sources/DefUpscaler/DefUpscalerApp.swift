@@ -110,6 +110,7 @@ struct ContentView: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Namespace private var glassNamespace
     @State private var targeted = false
     @State private var compare = true
      @State private var showQueue = true
@@ -127,22 +128,9 @@ struct ContentView: View {
                 workspace
                 VStack(spacing: 12) {
                     Spacer()
-                    if model.running {
-                        VStack(spacing: 5) {
-                            ProgressView(value: model.progress)
-                                .animation(reduceMotion ? nil : .linear(duration: 0.12), value: model.progress)
-                            HStack {
-                                Text(model.phase)
-                                Spacer()
-                                Text("\(Int(model.progress * 100)) %").monospacedDigit()
-                            }.font(.caption)
-                        }
-                        .padding(12)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-                        .padding(.horizontal, 32)
-                    }
                     controls
-                }.padding(16)
+                }
+                .padding(16)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             if showQueue && !model.items.isEmpty { queue }
@@ -247,19 +235,64 @@ struct ContentView: View {
         }
     }
 
+    private var progressRow: some View {
+        VStack(spacing: 6) {
+            ProgressView(value: model.progress)
+                .animation(reduceMotion ? nil : .linear(duration: 0.12), value: model.progress)
+            HStack {
+                Text(model.phase)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 12)
+                Text("\(Int(model.progress * 100)) %")
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+            }
+            .font(.caption)
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
+    }
+
     @ViewBuilder private var controls: some View {
         if #available(macOS 26, *), !reduceTransparency {
-            GlassEffectContainer(spacing: 10) {
-                actionRow.padding(10)
-                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20))
-            }
-        } else {
-            actionRow.padding(10)
-                .background {
-                    RoundedRectangle(cornerRadius: 18).fill(
-                        reduceTransparency ? Color(nsColor: .windowBackgroundColor) : Color(nsColor: .controlBackgroundColor)
-                    )
+            GlassEffectContainer(spacing: 16) {
+                VStack(spacing: 10) {
+                    if model.running {
+                        progressRow
+                            .padding(12)
+                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16))
+                            .glassEffectID("upscaling-progress", in: glassNamespace)
+                            .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                    }
+                    actionRow
+                        .padding(10)
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20))
+                        .glassEffectID("upscaling-actions", in: glassNamespace)
                 }
+            }
+            .animation(movement, value: model.running)
+        } else {
+            VStack(spacing: 10) {
+                if model.running {
+                    progressRow
+                        .padding(12)
+                        .background(
+                            reduceTransparency ? Color(nsColor: .windowBackgroundColor)
+                                               : Color(nsColor: .controlBackgroundColor),
+                            in: RoundedRectangle(cornerRadius: 16)
+                        )
+                        .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                }
+                actionRow
+                    .padding(10)
+                    .background(
+                        reduceTransparency ? Color(nsColor: .windowBackgroundColor)
+                                           : Color(nsColor: .controlBackgroundColor),
+                        in: RoundedRectangle(cornerRadius: 18)
+                    )
+            }
+            .animation(movement, value: model.running)
         }
     }
 
