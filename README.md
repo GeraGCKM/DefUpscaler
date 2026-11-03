@@ -1,6 +1,6 @@
-# DefUpscaler 0.2 — provisional build
+# DefUpscaler 0.3 — provisional build
 
-> **Provisional 0.2 build.** GitHub Actions passed native Core ML numerical parity and packaged inference on macOS; real Mac M5 thermal, multitasking, alpha-edge and UI acceptance remain outstanding. This is not a signed/notarized production release. See [the temporary validation report](docs/PROVISIONAL_COREML_VALIDATION.md).
+> **Provisional 0.3 build.** GitHub Actions passed native Core ML numerical parity and packaged inference on macOS; real Mac M5 thermal, multitasking, alpha-edge and UI acceptance remain outstanding. This is not a signed/notarized production release. See [the temporary validation report](docs/PROVISIONAL_COREML_VALIDATION.md).
 
 A small native macOS app for **drop → choose mode and scale → upscale → save**. SwiftUI/AppKit + Core ML. Offline image processing, no accounts, telemetry, runtime Python or third-party Swift dependencies. Apple Silicon, macOS 14+; native Liquid Glass controls on macOS 26+.
 
@@ -23,7 +23,7 @@ Download the ZIP from the artifact of a successful [macOS app run](https://githu
 | Illustration/anime | RealESRGAN_x4plus_anime_6B (6 RRDB blocks) |
 | Photography | RealESRGAN_x4plus (23 RRDB blocks) |
 
-Both models infer at **4× each side**. 2× downsamples the result. **8× and 16× use 4× neural inference plus Lanczos resizing**, not additional recovered detail or a native 16× model. The app shows this distinction. Output is capped at 64 MP and a conservative memory estimate; some inputs/scales are rejected before decoding.
+Illustration uses an official native 4× model. Photography at 2× prefers the official RealESRGAN_x2plus native 2× model; other photographic scales use 4×. **8× and 16× use 4× neural inference plus Lanczos resizing**, not additional recovered detail or a native 16× model. The app shows this distinction. Output is capped at 64 MP and a conservative memory estimate; some inputs/scales are rejected before decoding.
 
 Output: **8-bit SDR sRGB PNG with alpha**. Color is converted to sRGB; original ICC profiles and other metadata are not copied. Alpha is resampled separately from neural RGB; no face reconstruction is applied. Images reported above 8-bit depth are rejected. HEIC with an HDR gain map uses its SDR base image; the HDR enhancement is not retained. This version does **not** claim end-to-end HDR output. Confirm suitability before using it for HDR/print workflows.
 

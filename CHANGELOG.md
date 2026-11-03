@@ -1,3 +1,15 @@
+# 0.3 provisional
+
+- Model catalog with immutable checkpoint and Core ML input/output contracts.
+- RealESRGAN_x2plus available as native photo 2× inference, with x4 fallback.
+- Avoids Lanczos when the network already outputs the requested scale.
+- Immersive image-led workspace, draggable and clickable split comparison, horizontal deferred-thumbnail queue, floating controls and macOS Liquid Glass container.
+- Adaptive window geometry stops after the user manually resizes.
+- Throttles UI progress publication while preserving engine progress and cancellation.
+- CI parity and end-to-end validation now include the optional Photo2x model.
+- SDR sRGB/8-bit, alpha and output size limits remain as in 0.2.
+- Real-world M5 visual, thermal and gesture acceptance is outstanding; new-model fidelity claims require paired image assessment.
+
 # Changelog
 
 ## 0.2.0 — Adaptive native preview (prerelease)

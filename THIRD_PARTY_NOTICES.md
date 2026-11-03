@@ -34,3 +34,7 @@ CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+
+## RealESRGAN_x2plus
+
+Photo2x is the upstream RealESRGAN_x2plus official checkpoint from the [Real-ESRGAN project](https://github.com/xinntao/Real-ESRGAN), subject to its BSD-3-Clause license. The model is downloaded at build time and validated against a pinned SHA-256 in scripts/convert_model.py. See also the model-provenance.json bundled with the application.

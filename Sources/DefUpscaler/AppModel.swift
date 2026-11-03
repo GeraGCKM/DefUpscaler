@@ -73,13 +73,20 @@ final class AppModel: ObservableObject {
     }
     var estimatedMemory: String {
         guard let metadata else { return "" }
-        let multiplier = showingResult && selected?.result != nil ? 1 : scale
-        let bytes = Int64(metadata.width) * Int64(metadata.height) * Int64(multiplier * multiplier) * 24 + 768 * 1024 * 1024
+        let resultVisible = showingResult && selected?.result != nil
+        let sourceScale = resultVisible ? (selected?.outputScale ?? scale) : 1
+        let sourceWidth = metadata.width / max(1, sourceScale)
+        let sourceHeight = metadata.height / max(1, sourceScale)
+        let outputScale = resultVisible ? (selected?.outputScale ?? scale) : scale
+        let bytes = Int64(sourceWidth) * Int64(sourceHeight) * Int64(outputScale * outputScale) * 24 + 768 * 1024 * 1024
         return "Presupuesto estimado: " + ByteCountFormatter.string(fromByteCount: bytes, countStyle: .memory) + ". No es una medición del pico real."
     }
     var dimensions: String {
         guard let metadata else { return "" }
-        if showingResult, selected?.result != nil { return "\(metadata.width) × \(metadata.height)" }
+        if showingResult, selected?.result != nil {
+            let multiplier = max(1, selected?.outputScale ?? 1)
+            return "\(metadata.width / multiplier) × \(metadata.height / multiplier) → \(metadata.width) × \(metadata.height)"
+        }
         return "\(metadata.width) × \(metadata.height) → \(metadata.width * scale) × \(metadata.height * scale)"
     }
 
@@ -174,8 +181,12 @@ final class AppModel: ObservableObject {
         start()
     }
     func cancel() { task?.cancel() }
-    private func setProgress(_ value: Double) { progress = value }
-    private func setPhase(_ value: String) { phase = value }
+    private func setProgress(_ value: Double) {
+        if value >= 1 || abs(value - progress) >= 0.002 { progress = value }
+    }
+    private func setPhase(_ value: String) {
+        if phase != value { phase = value }
+    }
     func retryFailed() {
         guard !running else { return }
         for i in items.indices where items[i].result == nil { items[i].state = "Pendiente" }
