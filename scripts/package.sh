@@ -17,10 +17,14 @@ cp packaging/Info.plist "$APP/Contents/Info.plist"
 for model in build/models/*.mlpackage; do
     xcrun coremlcompiler compile "$model" "$APP/Contents/Resources"
 done
+if [[ -d build/models/WebPhoto4x.mlmodelc ]]; then
+    cp -R build/models/WebPhoto4x.mlmodelc "$APP/Contents/Resources/"
+fi
 cp THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
 cp build/models/model-provenance.json "$APP/Contents/Resources/"
 python3 scripts/deduplicate-weights.py "$APP/Contents/Resources"
 codesign --force --deep --sign - "$APP"
 codesign --verify --deep --strict "$APP"
 ditto -c -k --sequesterRsrc --keepParent "$APP" build/DefUpscaler-macOS-AppleSilicon.zip
+unzip -tq build/DefUpscaler-macOS-AppleSilicon.zip
 shasum -a 256 build/DefUpscaler-macOS-AppleSilicon.zip > build/SHA256SUMS.txt

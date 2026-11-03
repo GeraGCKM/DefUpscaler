@@ -1,0 +1,437 @@
+import AppKit
+import SwiftUI
+import QuartzCore
+
+/// AppKit owns trackpad pan, momentum and pinch magnification. Both images share
+/// one document coordinate system; comparison never modifies the source pixels.
+struct NativeImageCanvas: NSViewRepresentable {
+    let result: NSImage
+    let original: NSImage?
+    let comparing: Bool
+    let identity: UUID?
+    let actualSize: Bool
+    let zoomRevision: UUID
+    let imagePixelWidth: Int
+    let reduceMotion: Bool
+    let onRequestDetail: () -> Void
+    let onToggleActualSize: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> CanvasScrollView {
+        let scroll = CanvasScrollView(frame: .zero)
+        scroll.drawsBackground = false
+        scroll.hasHorizontalScroller = false
+        scroll.hasVerticalScroller = false
+        scroll.horizontalScrollElasticity = .automatic
+        scroll.verticalScrollElasticity = .automatic
+        scroll.allowsMagnification = true
+        scroll.minMagnification = 0.5
+        scroll.maxMagnification = 32
+        scroll.contentView = CenteringCanvasClipView()
+        scroll.contentView.drawsBackground = false
+        let document = ComparisonDocumentView(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
+        document.onDoubleClick = { [weak coordinator = context.coordinator] in
+            coordinator?.onToggleActualSize?()
+        }
+        scroll.documentView = document
+        document.wantsLayer = true
+        context.coordinator.scroll = scroll
+        context.coordinator.document = document
+        scroll.onLayout = { [weak coordinator = context.coordinator] in coordinator?.layout() }
+        return scroll
+    }
+
+    func updateNSView(_ scroll: CanvasScrollView, context: Context) {
+        let coordinator = context.coordinator
+        scroll.onRequestDetail = onRequestDetail
+        coordinator.onToggleActualSize = onToggleActualSize
+        coordinator.reduceMotion = reduceMotion
+        let contentChanged = coordinator.identity != identity || coordinator.actualPixels != imagePixelWidth
+        coordinator.actualPixels = max(1, imagePixelWidth)
+        if coordinator.zoomRevision != zoomRevision {
+            coordinator.zoomRevision = zoomRevision
+            coordinator.zoomRequested = true
+            scroll.userMagnified = false
+        }
+        if let document = coordinator.document {
+            let shouldCompare = comparing && original != nil
+            let imageChanged = document.result !== result
+            let originalChanged = document.original !== original
+            if imageChanged || originalChanged || document.comparing != shouldCompare {
+                if imageChanged, contentChanged, !reduceMotion, document.result != nil {
+                    let transition = CATransition()
+                    transition.type = .fade
+                    transition.duration = 0.18
+                    transition.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                    document.layer?.add(transition, forKey: "preview-transition")
+                    let settle = CASpringAnimation(keyPath: "transform.scale")
+                    settle.mass = 1
+                    settle.stiffness = 260
+                    settle.damping = 32
+                    settle.fromValue = 0.989
+                    settle.toValue = 1.0
+                    settle.duration = 0.25
+                    settle.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                    document.layer?.add(settle, forKey: "preview-settle")
+                }
+                if imageChanged { document.result = result }
+                if originalChanged { document.original = original }
+                if document.comparing != shouldCompare { document.comparing = shouldCompare }
+            }
+            document.reducedMotion = reduceMotion
+        }
+        if coordinator.identity != identity {
+            coordinator.identity = identity
+            coordinator.lastActual = false
+            coordinator.resetOnNextLayout = true
+        }
+        coordinator.requestedActual = actualSize
+        coordinator.layout()
+    }
+
+    final class Coordinator {
+        weak var scroll: CanvasScrollView?
+        weak var document: ComparisonDocumentView?
+        var identity: UUID?
+        var zoomRevision: UUID?
+        var zoomRequested = false
+        var onToggleActualSize: (() -> Void)?
+        var requestedActual = false
+        var lastActual = false
+        var actualPixels = 1
+        var reduceMotion = false
+        var resetOnNextLayout = true
+        private var lastViewport = CGSize.zero
+        private var lastImageSize = CGSize.zero
+
+        func layout() {
+            guard let scroll, let document, let image = document.result else { return }
+            let viewport = scroll.bounds.size
+            guard viewport.width >= 1, viewport.height >= 1 else { return }
+            let imageSize = image.size
+            guard imageSize.width > 0, imageSize.height > 0 else { return }
+            let frameChanged = viewport != lastViewport || imageSize != lastImageSize
+            if frameChanged {
+                let fitted = min(viewport.width / imageSize.width, viewport.height / imageSize.height)
+                let width = max(1, floor(imageSize.width * fitted))
+                let height = max(1, floor(imageSize.height * fitted))
+                // Update the cached geometry first: changing the document size
+                // may synchronously invoke a nested NSScrollView layout.
+                lastViewport = viewport
+                lastImageSize = imageSize
+                if document.frame.size != CGSize(width: width, height: height) {
+                    document.setFrameSize(CGSize(width: width, height: height))
+                }
+                scroll.contentView.needsDisplay = true
+            }
+            if resetOnNextLayout {
+                resetOnNextLayout = false
+                scroll.magnification = 1
+                lastActual = false
+            }
+            if zoomRequested || requestedActual != lastActual || (frameChanged && requestedActual && !scroll.userMagnified) {
+                zoomRequested = false
+                lastActual = requestedActual
+                let backing = scroll.window?.backingScaleFactor ?? 2
+                let desired = requestedActual
+                    ? CGFloat(actualPixels) / max(1, document.frame.width * backing)
+                    : 1
+                let target = min(scroll.maxMagnification, max(scroll.minMagnification, desired))
+                let center = NSPoint(x: document.bounds.midX, y: document.bounds.midY)
+                if reduceMotion || resetOnNextLayout || frameChanged {
+                    scroll.setMagnification(target, centeredAt: center)
+                } else {
+                    NSAnimationContext.runAnimationGroup { context in
+                        context.duration = 0.24
+                        context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.8, 0.2, 1)
+                        scroll.animator().setMagnification(target, centeredAt: center)
+                    }
+                }
+            }
+            document.zoom = scroll.magnification
+        }
+    }
+}
+
+final class CanvasScrollView: NSScrollView {
+    var onLayout: (() -> Void)?
+    var onRequestDetail: (() -> Void)?
+    var userMagnified = false
+
+    override func layout() {
+        super.layout()
+        onLayout?()
+    }
+
+    private func interruptAutomaticMotion() {
+        (documentView as? ComparisonDocumentView)?.interruptMotion()
+        contentView.layer?.removeAllAnimations()
+        layer?.removeAllAnimations()
+    }
+
+    override func reflectScrolledClipView(_ clipView: NSClipView) {
+        super.reflectScrolledClipView(clipView)
+        (documentView as? ComparisonDocumentView)?.updateViewportGeometry()
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        interruptAutomaticMotion()
+        super.scrollWheel(with: event) // Keep AppKit's native momentum phases.
+    }
+
+    override func magnify(with event: NSEvent) {
+        interruptAutomaticMotion()
+        userMagnified = true
+        onRequestDetail?()
+        // AppKit's document coordinate system keeps the touched image location
+        // anchored, including when its centered clip bounds have negative origins.
+        let anchor = documentView?.convert(event.locationInWindow, from: nil) ?? .zero
+        let target = min(maxMagnification, max(minMagnification,
+                                              magnification * (1 + event.magnification)))
+        setMagnification(target, centeredAt: anchor)
+        // The comparison grip and line stay a fixed on-screen size even while
+        // the user is actively pinching, rather than after SwiftUI updates.
+        (documentView as? ComparisonDocumentView)?.zoom = magnification
+    }
+}
+
+final class CenteringCanvasClipView: NSClipView {
+    override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
+        var rect = super.constrainBoundsRect(proposedBounds)
+        if let document = documentView {
+            if document.frame.width < proposedBounds.width {
+                rect.origin.x = -(proposedBounds.width - document.frame.width) / 2
+            }
+            if document.frame.height < proposedBounds.height {
+                rect.origin.y = -(proposedBounds.height - document.frame.height) / 2
+            }
+        }
+        return rect
+    }
+}
+
+/// Renders each image once into composited Core Animation layers. Dragging
+/// and clicking the divider changes only its mask and lightweight vector
+/// overlays; the source/result images are never recomputed or CPU-redrawn for
+/// each pointer event.
+final class ComparisonDocumentView: NSView {
+    var result: NSImage? { didSet { updateResultContents() } }
+    var original: NSImage? { didSet { updateOriginalContents() } }
+    var comparing = false { didSet { updateGeometry() } }
+    var reducedMotion = false
+    var zoom: CGFloat = 1 {
+        didSet { if zoom != oldValue { updateGeometry() } }
+    }
+    var onDoubleClick: (() -> Void)?
+    private var draggingDivider = false
+    private var installed = false
+    private var cursorArea: NSTrackingArea?
+    private let resultImage = CALayer()
+    private let originalImage = CALayer()
+    private let originalClip = CAShapeLayer()
+    private let dividerLine = CALayer()
+    private let grip = CALayer()
+    private let gripMarks = CAShapeLayer()
+
+    var divider: CGFloat = 0.5 {
+        didSet { updateGeometry() }
+    }
+
+    override var isFlipped: Bool { true }
+    override var isOpaque: Bool { false }
+    override var acceptsFirstResponder: Bool { true }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        installLayersIfNeeded()
+    }
+
+    override func layout() {
+        super.layout()
+        installLayersIfNeeded()
+        updateGeometry()
+    }
+
+    private func installLayersIfNeeded() {
+        guard !installed, let root = layer else { return }
+        installed = true
+        root.masksToBounds = true
+        resultImage.contentsGravity = .resize
+        originalImage.contentsGravity = .resize
+        originalImage.mask = originalClip
+        root.addSublayer(resultImage)
+        root.addSublayer(originalImage)
+
+        dividerLine.backgroundColor = NSColor.white.withAlphaComponent(0.93).cgColor
+        dividerLine.shadowColor = NSColor.black.cgColor
+        dividerLine.shadowOpacity = 0.22
+        dividerLine.shadowRadius = 2
+        root.addSublayer(dividerLine)
+
+        grip.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.94).cgColor
+        grip.borderColor = NSColor.separatorColor.cgColor
+        grip.borderWidth = 0.8
+        grip.shadowColor = NSColor.black.cgColor
+        grip.shadowOpacity = 0.14
+        grip.shadowRadius = 4
+        grip.shadowOffset = CGSize(width: 0, height: 1)
+        gripMarks.fillColor = nil
+        gripMarks.strokeColor = NSColor.secondaryLabelColor.cgColor
+        gripMarks.lineCap = .round
+        grip.addSublayer(gripMarks)
+        root.addSublayer(grip)
+
+        updateResultContents()
+        updateOriginalContents()
+        updateGeometry()
+    }
+
+    private func updateResultContents() {
+        guard installed else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        resultImage.contents = result?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        CATransaction.commit()
+    }
+
+    private func updateOriginalContents() {
+        guard installed else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        originalImage.contents = original?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        CATransaction.commit()
+    }
+
+    func updateViewportGeometry() { updateGeometry() }
+
+    private func updateGeometry() {
+        guard installed else { return }
+        CATransaction.begin()
+        // Direct drag must never inherit implicit CA easing or introduce latency.
+        CATransaction.setDisableActions(true)
+        resultImage.frame = bounds
+        originalImage.frame = bounds
+        originalClip.frame = originalImage.bounds
+        let position = bounds.width * min(1, max(0, divider))
+        originalClip.path = CGPath(rect: CGRect(x: 0, y: 0,
+                                               width: position, height: bounds.height),
+                                   transform: nil)
+        let factor = max(0.5, zoom)
+        let lineWidth = 1.8 / factor
+        dividerLine.frame = CGRect(x: position - lineWidth / 2, y: 0,
+                                   width: lineWidth, height: bounds.height)
+        let radius = 13 / factor
+        let visible = bounds.intersection(visibleRect)
+        let gripY = visible.isEmpty ? bounds.midY : visible.midY
+        grip.frame = CGRect(x: position - radius, y: gripY - radius,
+                            width: radius * 2, height: radius * 2)
+        grip.cornerRadius = radius
+        gripMarks.frame = grip.bounds
+        gripMarks.lineWidth = 1 / factor
+        let ticks = CGMutablePath()
+        ticks.move(to: CGPoint(x: radius - 7 / factor, y: radius))
+        ticks.addLine(to: CGPoint(x: radius - 3 / factor, y: radius))
+        ticks.move(to: CGPoint(x: radius + 3 / factor, y: radius))
+        ticks.addLine(to: CGPoint(x: radius + 7 / factor, y: radius))
+        gripMarks.path = ticks
+
+        let showDivider = comparing && original != nil && result != nil
+        originalImage.isHidden = !showDivider
+        dividerLine.isHidden = !showDivider
+        grip.isHidden = !showDivider
+        CATransaction.commit()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let cursorArea { removeTrackingArea(cursorArea) }
+        let area = NSTrackingArea(rect: .zero,
+                                  options: [.cursorUpdate, .activeInKeyWindow, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        cursorArea = area
+    }
+
+    /// Capture presentation geometry before removing animations: a new gesture
+    /// always takes over from the currently visible divider, never its old target.
+    func interruptMotion() {
+        let visibleX = dividerLine.presentation()?.position.x
+        let wasMoving = dividerLine.animation(forKey: "divider-travel") != nil
+        originalClip.removeAllAnimations()
+        dividerLine.removeAllAnimations()
+        grip.removeAllAnimations()
+        layer?.removeAnimation(forKey: "preview-transition")
+        layer?.removeAnimation(forKey: "preview-settle")
+        if wasMoving, let visibleX { divider = min(1, max(0, visibleX / max(1, bounds.width))) }
+    }
+
+    private func moveDivider(to destination: CGFloat, animated: Bool) {
+        interruptMotion()
+        let oldPath = originalClip.path
+        let oldLine = dividerLine.position
+        let oldGrip = grip.position
+        divider = min(1, max(0, destination))
+        guard animated, !reducedMotion else { return }
+        // One CA transaction, identical timing: mask and grip cannot drift apart.
+        func travel(_ layer: CALayer, key: String, from: Any?, to: Any?) {
+            let animation = CABasicAnimation(keyPath: key)
+            animation.fromValue = from
+            animation.toValue = to
+            animation.duration = 0.16
+            animation.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 0.8, 0.25, 1)
+            layer.add(animation, forKey: "divider-travel")
+        }
+        travel(originalClip, key: "path", from: oldPath, to: originalClip.path)
+        travel(dividerLine, key: "position", from: NSValue(point: oldLine), to: NSValue(point: dividerLine.position))
+        travel(grip, key: "position", from: NSValue(point: oldGrip), to: NSValue(point: grip.position))
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard result != nil else { return }
+        window?.makeFirstResponder(self)
+        interruptMotion()
+        if event.clickCount == 2 {
+            draggingDivider = false
+            onDoubleClick?()
+            return
+        }
+        guard comparing, original != nil else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        let nearDivider = abs(point.x - bounds.width * divider) <= 18 / max(0.5, zoom)
+        draggingDivider = true
+        if !nearDivider {
+            moveDivider(to: point.x / max(1, bounds.width), animated: true)
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard draggingDivider else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        moveDivider(to: point.x / max(1, bounds.width), animated: false)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        draggingDivider = false
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard comparing else { super.keyDown(with: event); return }
+        let step: CGFloat = event.modifierFlags.contains(.shift) ? 0.1 : 0.025
+        switch event.keyCode {
+        case 123: moveDivider(to: divider - step, animated: true)
+        case 124: moveDivider(to: divider + step, animated: true)
+        default: super.keyDown(with: event)
+        }
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        guard comparing else { NSCursor.arrow.set(); return }
+        let point = convert(event.locationInWindow, from: nil)
+        if abs(point.x - bounds.width * divider) < 18 / max(0.5, zoom) {
+            NSCursor.resizeLeftRight.set()
+        } else {
+            NSCursor.arrow.set()
+        }
+    }
+}

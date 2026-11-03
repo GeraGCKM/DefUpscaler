@@ -1,3 +1,48 @@
+# 0.3 provisional — lightweight preview and export
+
+- Serial background decode lanes replace independent thumbnail/comparison tasks. Cancelled queued requests skip decode; small previews use evictable, cost-budgeted caches (4 MiB thumbnails, 16 MiB inspection). Full-resolution images are not cached.
+- Ambient colors sample a 64px image instead of reducing full-resolution textures. Repeated zoom commands reuse the displayed image; returning to fit releases full-resolution preview references.
+- Comparison loading cancels obsolete requests; unchanged image layers are not reassigned. Offscreen queue cells release their thumbnail reference.
+- PNG export uses a temporary file copy and atomic replacement instead of a whole-file Data buffer. Neural precision and model behavior remain unchanged.
+- These remove identified redundant work; no measured battery/RAM percentage improvement is claimed.
+
+# 0.3 provisional — delivery polish
+
+- Stable native glass identities transform the action surface into progress and back into save; controls sit outside the inspection viewport.
+- Spring-driven queue selection, collapsing queue, drop feedback and cancellable native divider travel. Direct manipulation takes over from presentation geometry.
+- Explicit cursor-centered pinch, native momentum, animated fit/100% and high-resolution preview promotion on the first pinch.
+- Ordered multi-image drops, latest-selection guards, visible recoverable messages and Reduce Motion window transitions.
+- Existing models, precision, alpha, PNG/JPEG exports and adaptive inference are preserved.
+
+# 0.3 provisional — native UX refinement
+
+- Replaced the monolithic queue expression with reusable async thumbnail cells and restrained hover/selection motion.
+- Unified the floating controls and the progress HUD in a native Liquid Glass container; their geometry responds together to state changes and to Reduce Motion / Reduce Transparency.
+- Retained the native NSScrollView across selection changes, fixed layout re-entry, and added spatial image-settle transitions with immediate trackpad pinch feedback.
+- Rebuilt the split comparator on cached Core Animation image layers and an animated mask, so divider movement does not continuously redraw the image pixels. Direct drag tracks the pointer; clicking elsewhere moves the divider quickly and continuously.
+- Added a three-color image-derived ambient backdrop, calculated once per preview on a background actor rather than using an expensive per-frame blur.
+- Kept the main toolbar limited to the actual task; the optional 75/25 photo fidelity mixture is available from macOS Settings instead of another permanent control.
+- Added explicit optional JPEG export, preserving PNG by default and compositing alpha onto white only when the user selects JPEG. Batch export remains PNG.
+- Preserved native Core ML, queue, autosizing, offline privacy and the working v0.3 model selection.
+- No claim of on-device M5 visual/thermal acceptance or full HDR support.
+
+# 0.3 provisional
+
+- Optional RealPLKSR/NomosWebPhoto Core ML photographic alternative with pinned compiled-model archive and native pixel-buffer inference tests.
+- Native NSScrollView comparison canvas for trackpad pan/pinch zoom, instant divider drag, rapid click transitions and shared original/result framing.
+- Intermediate Float16 Core Image output eliminates early 8-bit rounding before final down/up-resampling.
+- Keyboard shortcuts and stale-preview comparison guards; existing batch/save/cancel behavior retained.
+
+- Model catalog with immutable checkpoint and Core ML input/output contracts.
+- RealESRGAN_x2plus available as native photo 2× inference, with x4 fallback.
+- Avoids Lanczos when the network already outputs the requested scale.
+- Immersive image-led workspace, draggable and clickable split comparison, horizontal deferred-thumbnail queue, floating controls and macOS Liquid Glass container.
+- Adaptive window geometry stops after the user manually resizes.
+- Throttles UI progress publication while preserving engine progress and cancellation.
+- CI parity and end-to-end validation now include the optional Photo2x model.
+- SDR sRGB/8-bit, alpha and output size limits remain as in 0.2.
+- Real-world M5 visual, thermal and gesture acceptance is outstanding; new-model fidelity claims require paired image assessment.
+
 # Changelog
 
 ## 0.2.0 — Adaptive native preview (prerelease)
