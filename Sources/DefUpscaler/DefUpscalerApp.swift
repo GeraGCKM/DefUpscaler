@@ -258,6 +258,18 @@ struct ContentView: View {
             Picker("Escala", selection: $model.scale) {
                 ForEach([2,4,8,16], id: \.self) { Text("\($0)×").tag($0) }
             }.labelsHidden().frame(width: 64).disabled(model.running)
+            if model.mode == .photo {
+                Toggle(isOn: $model.proFidelity) {
+                    Label("Pro", systemImage: "sparkles")
+                        .labelStyle(.titleOnly)
+                }
+                .toggleStyle(.button)
+                .disabled(model.running)
+                .help("Pro · fidelidad: 75 % reescalado del original y 25 % IA. " +
+                      "RealPLKSR para 4× o más; Real-ESRGAN nativo en 2×. " +
+                      "Más conservador, no garantiza recuperar detalles reales.")
+                .accessibilityLabel("Pro: priorizar fidelidad al original")
+            }
             Spacer(minLength: 0)
             if canCompare {
                 Toggle(isOn: $compare) {
@@ -307,15 +319,19 @@ struct ContentView: View {
                             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(
                                 item.id == model.selectedID ? Color.accentColor : .clear, lineWidth: 2))
                             HStack(spacing: 3) {
-                                if item.result != nil { Image(systemName: "checkmark.circle.fill") }
-                                else if item.state == "En proceso" { Image(systemName: "hourglass") }
+                                if item.result != nil {
+                                    Image(systemName: item.proFidelity ? "sparkles" : "checkmark.circle.fill")
+                                } else if item.state == "En proceso" {
+                                    Image(systemName: "hourglass")
+                                }
                                 Text(item.input.deletingPathExtension().lastPathComponent)
                                     .lineLimit(1).frame(width: 48)
                             }.font(.system(size: 9))
                         }
                     }
                     .buttonStyle(.plain)
-                    .help(item.input.lastPathComponent + " · " + item.state)
+                    .help(item.input.lastPathComponent + " · " + item.state +
+                          (item.proFidelity ? " · Pro fidelidad" : ""))
                     .accessibilityLabel(item.input.lastPathComponent + ", " + item.state)
                 }
             }.padding(.horizontal, 16).padding(.vertical, 10)
