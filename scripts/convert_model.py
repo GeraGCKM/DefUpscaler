@@ -3,6 +3,8 @@ import hashlib
 import json
 from pathlib import Path
 import urllib.request
+import time
+import os
 
 import coremltools as ct
 import numpy as np
@@ -74,7 +76,19 @@ def convert(name, filename, url, digest_expected, blocks, scale=4):
     OUT.mkdir(parents=True, exist_ok=True)
     weights = OUT / filename
     if not weights.exists():
-        urllib.request.urlretrieve(url, weights)
+        # GitHub release downloads occasionally lose DNS or reset the connection
+        # on shared CI runners. Keep retries bounded; never skip the SHA-256 gate.
+        for attempt in range(4):
+            try:
+                partial = weights.with_suffix(weights.suffix + ".partial")
+                urllib.request.urlretrieve(url, partial)
+                os.replace(partial, weights)
+                break
+            except (OSError, urllib.error.URLError):
+                partial.unlink(missing_ok=True)
+                if attempt == 3:
+                    raise
+                time.sleep(3 * (attempt + 1))
     digest = hashlib.sha256(weights.read_bytes()).hexdigest()
     expected_digest = digest_expected
     if digest != expected_digest:
