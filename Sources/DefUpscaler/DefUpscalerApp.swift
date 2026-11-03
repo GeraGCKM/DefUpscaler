@@ -73,6 +73,11 @@ struct DefUpscalerApp: App {
                     Text("Clara").tag("light")
                     Text("Oscura").tag("dark")
                 }
+                Toggle("Mezcla conservadora para fotografía", isOn: $model.proFidelity)
+                    .help("Conserva 75 % del remuestreo tradicional y 25 % de inferencia neuronal. No garantiza mayor fidelidad; compárala con el modo estándar.")
+                    .disabled(model.running)
+                Text("La mezcla conservadora evita algunos cambios de textura, pero no recupera más detalle real. Para uso normal, déjala desactivada.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Text("Salida: PNG SDR sRGB de 8 bits, con transparencia. HDR no se conserva. Las imágenes de más de 8 bits se rechazan; HEIC con mapa HDR usa su imagen base SDR.")
                     .font(.caption).foregroundStyle(.secondary)
             }.padding(24).frame(width: 400)
@@ -105,13 +110,12 @@ struct ContentView: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Namespace private var glassNamespace
     @State private var targeted = false
     @State private var compare = true
-    @State private var divider = 0.5
      @State private var showQueue = true
     @State private var original: NSImage?
     @State private var compareToken = UUID()
-    @State private var dividerDragStart: CGFloat?
     private var movement: Animation? { reduceMotion ? nil : .smooth(duration: 0.24) }
     private var canCompare: Bool {
         model.selected?.result != nil && original != nil &&
@@ -124,21 +128,9 @@ struct ContentView: View {
                 workspace
                 VStack(spacing: 12) {
                     Spacer()
-                    if model.running {
-                        VStack(spacing: 5) {
-                            ProgressView(value: model.progress)
-                            HStack {
-                                Text(model.phase)
-                                Spacer()
-                                Text("\(Int(model.progress * 100)) %").monospacedDigit()
-                            }.font(.caption)
-                        }
-                        .padding(12)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-                        .padding(.horizontal, 32)
-                    }
                     controls
-                }.padding(16)
+                }
+                .padding(16)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             if showQueue && !model.items.isEmpty { queue }
@@ -167,13 +159,24 @@ struct ContentView: View {
         ZStack {
             Color(nsColor: .textBackgroundColor)
             if model.preview != nil && !reduceTransparency {
+                // Apple Music-like atmosphere without a live full-image blur:
+                // three precomputed area colors drive static system gradients.
                 RadialGradient(colors: [
-                    model.ambiance.opacity(scheme == .dark ? 0.4 : 0.22),
-                    model.ambiance.opacity(scheme == .dark ? 0.1 : 0.06),
+                    model.ambianceSecondary.opacity(scheme == .dark ? 0.35 : 0.19),
                     .clear
-                ], center: .center, startRadius: 0, endRadius: 620)
-                .animation(movement, value: model.previewRevision)
-                .allowsHitTesting(false)
+                ], center: .topLeading, startRadius: 24, endRadius: 690)
+                    .allowsHitTesting(false)
+                RadialGradient(colors: [
+                    model.ambianceTertiary.opacity(scheme == .dark ? 0.32 : 0.17),
+                    .clear
+                ], center: .bottomTrailing, startRadius: 16, endRadius: 620)
+                    .allowsHitTesting(false)
+                RadialGradient(colors: [
+                    model.ambiance.opacity(scheme == .dark ? 0.20 : 0.11),
+                    .clear
+                ], center: .center, startRadius: 0, endRadius: 700)
+                    .allowsHitTesting(false)
+                    .animation(movement, value: model.previewRevision)
             }
             if let preview = model.preview {
                 NativeImageCanvas(
@@ -189,7 +192,8 @@ struct ContentView: View {
                         model.refreshPreview()
                     }
                 )
-                .id(model.selectedID)
+                // Preserve the same native scroll view across selections: the
+                // AppKit canvas performs a real interruptible content transition.
                 .accessibilityLabel("Imagen, desplaza con dos dedos o pellizca para ampliar")
             } else {
                 VStack(spacing: 12) {
@@ -231,19 +235,64 @@ struct ContentView: View {
         }
     }
 
+    private var progressRow: some View {
+        VStack(spacing: 6) {
+            ProgressView(value: model.progress)
+                .animation(reduceMotion ? nil : .linear(duration: 0.12), value: model.progress)
+            HStack {
+                Text(model.phase)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 12)
+                Text("\(Int(model.progress * 100)) %")
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+            }
+            .font(.caption)
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
+    }
+
     @ViewBuilder private var controls: some View {
         if #available(macOS 26, *), !reduceTransparency {
-            GlassEffectContainer(spacing: 10) {
-                actionRow.padding(10)
-                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20))
-            }
-        } else {
-            actionRow.padding(10)
-                .background {
-                    RoundedRectangle(cornerRadius: 18).fill(
-                        reduceTransparency ? Color(nsColor: .windowBackgroundColor) : Color(nsColor: .controlBackgroundColor)
-                    )
+            GlassEffectContainer(spacing: 16) {
+                VStack(spacing: 10) {
+                    if model.running {
+                        progressRow
+                            .padding(12)
+                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16))
+                            .glassEffectID("upscaling-progress", in: glassNamespace)
+                            .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                    }
+                    actionRow
+                        .padding(10)
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20))
+                        .glassEffectID("upscaling-actions", in: glassNamespace)
                 }
+            }
+            .animation(movement, value: model.running)
+        } else {
+            VStack(spacing: 10) {
+                if model.running {
+                    progressRow
+                        .padding(12)
+                        .background(
+                            reduceTransparency ? Color(nsColor: .windowBackgroundColor)
+                                               : Color(nsColor: .controlBackgroundColor),
+                            in: RoundedRectangle(cornerRadius: 16)
+                        )
+                        .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                }
+                actionRow
+                    .padding(10)
+                    .background(
+                        reduceTransparency ? Color(nsColor: .windowBackgroundColor)
+                                           : Color(nsColor: .controlBackgroundColor),
+                        in: RoundedRectangle(cornerRadius: 18)
+                    )
+            }
+            .animation(movement, value: model.running)
         }
     }
 
@@ -258,18 +307,6 @@ struct ContentView: View {
             Picker("Escala", selection: $model.scale) {
                 ForEach([2,4,8,16], id: \.self) { Text("\($0)×").tag($0) }
             }.labelsHidden().frame(width: 64).disabled(model.running)
-            if model.mode == .photo {
-                Toggle(isOn: $model.proFidelity) {
-                    Label("Pro", systemImage: "sparkles")
-                        .labelStyle(.titleOnly)
-                }
-                .toggleStyle(.button)
-                .disabled(model.running)
-                .help("Pro · fidelidad: 75 % reescalado del original y 25 % IA. " +
-                      "RealPLKSR para 4× o más; Real-ESRGAN nativo en 2×. " +
-                      "Más conservador, no garantiza recuperar detalles reales.")
-                .accessibilityLabel("Pro: priorizar fidelidad al original")
-            }
             Spacer(minLength: 0)
             if canCompare {
                 Toggle(isOn: $compare) {
@@ -292,12 +329,18 @@ struct ContentView: View {
             } label: { Image(systemName: "ellipsis").frame(width: 24) }
                 .menuStyle(.borderlessButton).accessibilityLabel("Más acciones")
             if model.running {
-                Button("Cancelar", action: model.cancel)
+                Button(action: model.cancel) {
+                    Label("Cancelar", systemImage: "xmark")
+                }
             } else if model.hasPending {
-                Button("Reescalar", action: model.start).modifier(PrimaryAction())
+                Button(action: model.start) {
+                    Label("Reescalar", systemImage: "play.fill")
+                }.modifier(PrimaryAction())
                     .keyboardShortcut(.defaultAction).disabled(model.saving || model.loading)
             } else if model.selected?.result != nil {
-                Button("Guardar", action: model.save).modifier(PrimaryAction()).disabled(model.saving)
+                Button(action: model.save) {
+                    Label("Guardar", systemImage: "square.and.arrow.down")
+                }.modifier(PrimaryAction()).disabled(model.saving)
             } else {
                 Button("Reescalar", action: model.start).disabled(true)
             }
@@ -307,38 +350,20 @@ struct ContentView: View {
 
     private var queue: some View {
         ScrollView(.horizontal) {
-            HStack(spacing: 9) {
+            LazyHStack(spacing: 8) {
                 ForEach(model.items) { item in
-                    Button { model.select(item.id) } label: {
-                        VStack(spacing: 4) {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 8).fill(.quaternary)
-                                QueueThumbnail(url: item.input)
-                            }
-                            .frame(width: 62, height: 47).clipShape(RoundedRectangle(cornerRadius: 8))
-                            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(
-                                item.id == model.selectedID ? Color.accentColor : .clear, lineWidth: 2))
-                            HStack(spacing: 3) {
-                                if item.result != nil {
-                                    Image(systemName: item.proFidelity ? "sparkles" : "checkmark.circle.fill")
-                                } else if item.state == "En proceso" {
-                                    Image(systemName: "hourglass")
-                                }
-                                Text(item.input.deletingPathExtension().lastPathComponent)
-                                    .lineLimit(1).frame(width: 48)
-                            }.font(.system(size: 9))
-                        }
+                    QueueCell(item: item, selected: item.id == model.selectedID) {
+                        model.select(item.id)
                     }
-                    .buttonStyle(.plain)
-                    .help(item.input.lastPathComponent + " · " + item.state +
-                          (item.proFidelity ? " · Pro fidelidad" : ""))
-                    .accessibilityLabel(item.input.lastPathComponent + ", " + item.state)
                 }
-            }.padding(.horizontal, 16).padding(.vertical, 10)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
         }
         .scrollIndicators(.hidden)
-        .frame(height: 87)
+        .frame(height: 85)
         .background(.bar)
+        .accessibilityLabel("Cola de imágenes")
     }
 
     private func loadComparison() {
@@ -364,6 +389,52 @@ struct ContentView: View {
     private func resetZoom() {
         model.actualSize = false
         model.refreshPreview()
+    }
+}
+
+private struct QueueCell: View {
+    let item: QueueItem
+    let selected: Bool
+    let onSelect: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: onSelect) {
+            VStack(spacing: 5) {
+                QueueThumbnail(url: item.input)
+                    .frame(width: 68, height: 47)
+                    .clipShape(RoundedRectangle(cornerRadius: 9))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 9)
+                            .strokeBorder(selected ? Color.accentColor : Color.primary.opacity(hovered ? 0.26 : 0), lineWidth: selected ? 2 : 1)
+                    }
+                HStack(spacing: 3) {
+                    if item.result != nil {
+                        Image(systemName: item.proFidelity ? "sparkles" : "checkmark.circle.fill")
+                    } else if item.state == "En proceso" {
+                        Image(systemName: "hourglass")
+                    }
+                    Text(item.input.deletingPathExtension().lastPathComponent)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .font(.system(size: 10, weight: selected ? .medium : .regular))
+                .frame(width: 68)
+            }
+            .padding(5)
+            .background(selected ? Color.accentColor.opacity(0.09) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 13))
+            .scaleEffect(hovered ? 1.035 : 1)
+            .contentShape(RoundedRectangle(cornerRadius: 13))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .animation(reduceMotion ? nil : .smooth(duration: 0.19), value: hovered)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.23), value: selected)
+        .help(item.input.lastPathComponent + " · " + item.state)
+        .accessibilityLabel(item.input.lastPathComponent + ", " + item.state)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 

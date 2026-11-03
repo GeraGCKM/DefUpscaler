@@ -56,6 +56,12 @@ struct NativeImageCanvas: NSViewRepresentable {
                     transition.duration = 0.18
                     transition.timingFunction = CAMediaTimingFunction(name: .easeOut)
                     document.layer?.add(transition, forKey: "preview-transition")
+                    let settle = CABasicAnimation(keyPath: "transform.scale")
+                    settle.fromValue = 0.989
+                    settle.toValue = 1.0
+                    settle.duration = 0.25
+                    settle.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                    document.layer?.add(settle, forKey: "preview-settle")
                 }
                 document.result = result
                 document.original = original
@@ -97,11 +103,13 @@ struct NativeImageCanvas: NSViewRepresentable {
                 let fitted = min(viewport.width / imageSize.width, viewport.height / imageSize.height)
                 let width = max(1, floor(imageSize.width * fitted))
                 let height = max(1, floor(imageSize.height * fitted))
+                // Update the cached geometry first: changing the document size
+                // may synchronously invoke a nested NSScrollView layout.
+                lastViewport = viewport
+                lastImageSize = imageSize
                 if document.frame.size != CGSize(width: width, height: height) {
                     document.setFrameSize(CGSize(width: width, height: height))
                 }
-                lastViewport = viewport
-                lastImageSize = imageSize
                 scroll.contentView.needsDisplay = true
             }
             if resetOnNextLayout {
@@ -126,9 +134,17 @@ struct NativeImageCanvas: NSViewRepresentable {
 
 final class CanvasScrollView: NSScrollView {
     var onLayout: (() -> Void)?
+
     override func layout() {
         super.layout()
         onLayout?()
+    }
+
+    override func magnify(with event: NSEvent) {
+        super.magnify(with: event)
+        // The comparison grip and line stay a fixed on-screen size even while
+        // the user is actively pinching, rather than after SwiftUI updates.
+        (documentView as? ComparisonDocumentView)?.zoom = magnification
     }
 }
 
@@ -147,20 +163,31 @@ final class CenteringCanvasClipView: NSClipView {
     }
 }
 
-/// Draws both versions at identical dimensions and orientation. Interactive
-/// divider is 32 screen points wide, while the visible line is only 1.8 points.
+/// Renders each image once into composited Core Animation layers. Dragging
+/// and clicking the divider changes only its mask and lightweight vector
+/// overlays; the source/result images are never recomputed or CPU-redrawn for
+/// each pointer event.
 final class ComparisonDocumentView: NSView {
-    var result: NSImage?
-    var original: NSImage?
-    var comparing = false
+    var result: NSImage? { didSet { updateImageContents() } }
+    var original: NSImage? { didSet { updateImageContents() } }
+    var comparing = false { didSet { updateGeometry() } }
     var reducedMotion = false
     var zoom: CGFloat = 1 {
-        didSet { if zoom != oldValue { needsDisplay = true } }
+        didSet { if zoom != oldValue { updateGeometry() } }
     }
     var onDoubleClick: (() -> Void)?
     private var draggingDivider = false
+    private var installed = false
+    private var cursorArea: NSTrackingArea?
+    private let resultImage = CALayer()
+    private let originalImage = CALayer()
+    private let originalClip = CAShapeLayer()
+    private let dividerLine = CALayer()
+    private let grip = CALayer()
+    private let gripMarks = CAShapeLayer()
+
     @objc dynamic var divider: CGFloat = 0.5 {
-        didSet { needsDisplay = true }
+        didSet { updateGeometry() }
     }
 
     override var isFlipped: Bool { true }
@@ -172,36 +199,103 @@ final class ComparisonDocumentView: NSView {
         return super.defaultAnimation(forKey: key)
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        guard let result else { return }
-        NSGraphicsContext.current?.imageInterpolation = .high
-        result.draw(in: bounds, from: .zero, operation: .sourceOver, fraction: 1)
-        guard comparing, let original else { return }
-        let split = bounds.width * divider
-        NSGraphicsContext.saveGraphicsState()
-        NSBezierPath(rect: NSRect(x: 0, y: 0, width: split, height: bounds.height)).addClip()
-        original.draw(in: bounds, from: .zero, operation: .sourceOver, fraction: 1)
-        NSGraphicsContext.restoreGraphicsState()
-        let adjusted = max(0.5, zoom)
-        let line = NSRect(x: split - 0.9 / adjusted, y: 0, width: 1.8 / adjusted, height: bounds.height)
-        NSColor.white.withAlphaComponent(0.92).setFill()
-        NSBezierPath(rect: line).fill()
-        let radius = 15 / adjusted
-        let grip = NSRect(x: split - radius, y: bounds.midY - radius,
-                          width: 2 * radius, height: 2 * radius)
-        NSColor.windowBackgroundColor.withAlphaComponent(0.93).setFill()
-        NSBezierPath(ovalIn: grip).fill()
-        NSColor.secondaryLabelColor.setStroke()
-        NSBezierPath(ovalIn: grip).stroke()
-        // Short lateral ticks communicate the dragging affordance.
-        let tick = NSBezierPath()
-        tick.move(to: NSPoint(x: split - 7 / adjusted, y: bounds.midY))
-        tick.line(to: NSPoint(x: split - 3 / adjusted, y: bounds.midY))
-        tick.move(to: NSPoint(x: split + 3 / adjusted, y: bounds.midY))
-        tick.line(to: NSPoint(x: split + 7 / adjusted, y: bounds.midY))
-        tick.lineWidth = 1 / adjusted
-        tick.stroke()
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        installLayersIfNeeded()
+    }
+
+    override func layout() {
+        super.layout()
+        installLayersIfNeeded()
+        updateGeometry()
+    }
+
+    private func installLayersIfNeeded() {
+        guard !installed, let root = layer else { return }
+        installed = true
+        root.masksToBounds = true
+        resultImage.contentsGravity = .resize
+        originalImage.contentsGravity = .resize
+        originalImage.mask = originalClip
+        root.addSublayer(resultImage)
+        root.addSublayer(originalImage)
+
+        dividerLine.backgroundColor = NSColor.white.withAlphaComponent(0.93).cgColor
+        dividerLine.shadowColor = NSColor.black.cgColor
+        dividerLine.shadowOpacity = 0.22
+        dividerLine.shadowRadius = 2
+        root.addSublayer(dividerLine)
+
+        grip.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.94).cgColor
+        grip.borderColor = NSColor.separatorColor.cgColor
+        grip.borderWidth = 0.8
+        grip.shadowColor = NSColor.black.cgColor
+        grip.shadowOpacity = 0.14
+        grip.shadowRadius = 4
+        grip.shadowOffset = CGSize(width: 0, height: 1)
+        gripMarks.fillColor = nil
+        gripMarks.strokeColor = NSColor.secondaryLabelColor.cgColor
+        gripMarks.lineCap = .round
+        grip.addSublayer(gripMarks)
+        root.addSublayer(grip)
+
+        updateImageContents()
+        updateGeometry()
+    }
+
+    private func updateImageContents() {
+        guard installed else { return }
+        // NSImage was initialized with CGImage on the preview-loader actor;
+        // retaining the CGImage as layer contents avoids expensive redraws.
+        resultImage.contents = result?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        originalImage.contents = original?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        updateGeometry()
+    }
+
+    private func updateGeometry() {
+        guard installed else { return }
+        CATransaction.begin()
+        // Direct drag must never inherit implicit CA easing or introduce latency.
+        CATransaction.setDisableActions(true)
+        resultImage.frame = bounds
+        originalImage.frame = bounds
+        originalClip.frame = originalImage.bounds
+        let position = bounds.width * min(1, max(0, divider))
+        originalClip.path = CGPath(rect: CGRect(x: 0, y: 0,
+                                               width: position, height: bounds.height),
+                                   transform: nil)
+        let factor = max(0.5, zoom)
+        let lineWidth = 1.8 / factor
+        dividerLine.frame = CGRect(x: position - lineWidth / 2, y: 0,
+                                   width: lineWidth, height: bounds.height)
+        let radius = 13 / factor
+        grip.frame = CGRect(x: position - radius, y: bounds.midY - radius,
+                            width: radius * 2, height: radius * 2)
+        grip.cornerRadius = radius
+        gripMarks.frame = grip.bounds
+        gripMarks.lineWidth = 1 / factor
+        let ticks = CGMutablePath()
+        ticks.move(to: CGPoint(x: radius - 7 / factor, y: radius))
+        ticks.addLine(to: CGPoint(x: radius - 3 / factor, y: radius))
+        ticks.move(to: CGPoint(x: radius + 3 / factor, y: radius))
+        ticks.addLine(to: CGPoint(x: radius + 7 / factor, y: radius))
+        gripMarks.path = ticks
+
+        let showDivider = comparing && original != nil && result != nil
+        originalImage.isHidden = !showDivider
+        dividerLine.isHidden = !showDivider
+        grip.isHidden = !showDivider
+        CATransaction.commit()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let cursorArea { removeTrackingArea(cursorArea) }
+        let area = NSTrackingArea(rect: .zero,
+                                  options: [.cursorUpdate, .activeInKeyWindow, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        cursorArea = area
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -211,21 +305,20 @@ final class ComparisonDocumentView: NSView {
             onDoubleClick?()
             return
         }
-        guard comparing else { return }
-        let position = convert(event.locationInWindow, from: nil)
-        let hitDistance = abs(position.x - bounds.width * divider)
-        if hitDistance <= 18 / max(0.5, zoom) {
+        guard comparing, original != nil else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        let distance = abs(point.x - bounds.width * divider)
+        if distance <= 18 / max(0.5, zoom) {
             draggingDivider = true
-            // The next mouseDragged event writes the actual pointer location.
         } else {
-            let newValue = min(1, max(0, position.x / max(1, bounds.width)))
+            let destination = min(1, max(0, point.x / max(1, bounds.width)))
             if reducedMotion {
-                divider = newValue
+                divider = destination
             } else {
                 NSAnimationContext.runAnimationGroup { context in
                     context.duration = 0.13
                     context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                    animator().divider = newValue
+                    animator().divider = destination
                 }
             }
         }
@@ -233,10 +326,10 @@ final class ComparisonDocumentView: NSView {
 
     override func mouseDragged(with event: NSEvent) {
         guard draggingDivider else { return }
-        let position = convert(event.locationInWindow, from: nil)
-        // Direct interaction always wins over a previous animated click.
+        let point = convert(event.locationInWindow, from: nil)
+        // Pointer motion always wins over an interrupted click-to-move animation.
         layer?.removeAllAnimations()
-        divider = min(1, max(0, position.x / max(1, bounds.width)))
+        divider = min(1, max(0, point.x / max(1, bounds.width)))
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -254,7 +347,12 @@ final class ComparisonDocumentView: NSView {
     }
 
     override func cursorUpdate(with event: NSEvent) {
-        if comparing { NSCursor.resizeLeftRight.set() }
-        else { NSCursor.arrow.set() }
+        guard comparing else { NSCursor.arrow.set(); return }
+        let point = convert(event.locationInWindow, from: nil)
+        if abs(point.x - bounds.width * divider) < 18 / max(0.5, zoom) {
+            NSCursor.resizeLeftRight.set()
+        } else {
+            NSCursor.arrow.set()
+        }
     }
 }
