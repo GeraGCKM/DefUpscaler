@@ -49,7 +49,19 @@ public enum MemorySnapshot {
 }
 
 public enum ImageMode: String, CaseIterable, Sendable {
-    case illustration, photo
-    public var title: String { self == .illustration ? "Ilustración / anime" : "Fotografía" }
-    public var modelName: String { self == .illustration ? "Anime4x" : "Photo4x" }
+    case illustration, photo, photoDetail
+    public var title: String {
+        switch self {
+        case .illustration: return "Ilustración / anime"
+        case .photo: return "Fotografía"
+        case .photoDetail: return "Fotografía · textura"
+        }
+    }
+    public var modelName: String {
+        switch self {
+        case .illustration: return "Anime4x"
+        case .photo: return "Photo4x"
+        case .photoDetail: return "WebPhoto4x"
+        }
+    }
 }

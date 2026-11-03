@@ -21,7 +21,12 @@ final class JobPlanTests: XCTestCase {
         for (width, height, scale) in [(0, 10, 4), (-1, 10, 4), (10, 10, 3), (Int.max, 10, 4), (10000, 10000, 4)] {
             XCTAssertThrowsError(try JobPlan(width: width, height: height, scale: scale, memoryBytes: .max))
         }
-        XCTAssertThrowsError(try JobPlan(width: 2000, height: 2000, scale: 4, memoryBytes: 4 * 1024 * 1024 * 1024))
+        // A 64 MP output fits the updated 75% physical-memory preflight on a
+        // 4 GiB machine, but must still be rejected on a 2 GiB machine.
+        XCTAssertNoThrow(try JobPlan(width: 2000, height: 2000, scale: 4,
+                                     memoryBytes: 4 * 1024 * 1024 * 1024))
+        XCTAssertThrowsError(try JobPlan(width: 2000, height: 2000, scale: 4,
+                                         memoryBytes: 2 * 1024 * 1024 * 1024))
     }
     func testTinyInputAndTwoTimesScale() throws {
         let plan = try JobPlan(width: 1, height: 1, scale: 2, memoryBytes: 8 * 1024 * 1024 * 1024)

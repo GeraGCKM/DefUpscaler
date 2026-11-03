@@ -40,7 +40,7 @@ public struct JobPlan: Sendable {
         let outputPixels = UInt64(width) * UInt64(height) * UInt64(scale * scale)
         // Includes decoded input, output, preview/export copies and a model working-set reserve.
         let estimatedBytes = outputPixels * 24 + 768 * 1024 * 1024
-        guard outputPixels <= 64_000_000, estimatedBytes <= memoryBytes / 3 else {
+        guard outputPixels <= 64_000_000, estimatedBytes <= memoryBytes * 3 / 4 else {
             throw UpscaleError.tooLarge
         }
         self.width = width

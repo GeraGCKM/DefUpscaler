@@ -14,15 +14,23 @@ public actor UpscaleEngine {
     private var criticalMemory = false
     private var busy = false
     private let suppliedModelURL: URL?
-    public init(modelURL: URL? = nil) { suppliedModelURL = modelURL }
+    private let suppliedModelScale: Int
+    public init(modelURL: URL? = nil, modelScale: Int = 4) {
+        suppliedModelURL = modelURL
+        suppliedModelScale = modelScale
+    }
 
     public func process(url: URL, scale: Int, mode: ImageMode = .illustration,
+                        neuralWeight: Double = 1,
                         progress: @escaping @Sendable (Double) async -> Void,
                         status: @escaping @Sendable (String) async -> Void = { _ in }) async throws -> URL {
         guard !busy else { throw UpscaleError.busy }
         busy = true
         defer { busy = false; context.clearCaches() }
         try Task.checkCancellation()
+        guard neuralWeight.isFinite, neuralWeight > 0, neuralWeight <= 1 else {
+            throw UpscaleError.invalidPrediction
+        }
         criticalMemory = false
         memoryWarning = false
         let source = DispatchSource.makeMemoryPressureSource(eventMask: [.normal, .warning, .critical], queue: .global(qos: .utility))
@@ -44,7 +52,13 @@ public actor UpscaleEngine {
         // Gain-map HEIC/HDR is not claimed as supported: only the SDR base is decoded.
         // Deep input is rejected above; every accepted image is color-managed into sRGB.
         let image = input.transformed(by: .init(translationX: -input.extent.minX, y: -input.extent.minY))
-        guard let modelURL = suppliedModelURL ?? Bundle.main.url(forResource: mode.modelName, withExtension: "mlmodelc") else {
+        // Native 2× photo inference is preferred when its verified profile is bundled.
+        // Explicitly supplied test models retain their declared native scale.
+        let descriptor = ModelCatalog.select(mode: mode, requestedScale: scale,
+            hasNativePhoto2x: Bundle.main.url(forResource: "Photo2x", withExtension: "mlmodelc") != nil)
+        let nativeScale = suppliedModelURL == nil ? descriptor.nativeScale : suppliedModelScale
+        let usesWebPhoto = mode == .photoDetail
+        guard let modelURL = suppliedModelURL ?? Bundle.main.url(forResource: descriptor.resource, withExtension: "mlmodelc") else {
             throw UpscaleError.missingModel
         }
         await status("Preparando modelo…")
@@ -62,19 +76,31 @@ public actor UpscaleEngine {
             "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0), "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: 1)
         ]).clampedToExtent()
         let alpha = image.transformed(by: .init(scaleX: CGFloat(scale), y: CGFloat(scale)))
+        // In Pro, the source image contributes 75% of the final RGB.
+        // The finite guard contains Lanczos ringing at image borders; alpha is
+        // always resampled separately, as in the standard pipeline.
+        let sourceReference: CIImage? = neuralWeight < 1
+            ? rgb.cropped(to: CGRect(x: -8, y: -8, width: plan.width + 16, height: plan.height + 16))
+                .applyingFilter("CILanczosScaleTransform", parameters: [
+                    kCIInputScaleKey: Double(scale), kCIInputAspectRatioKey: 1.0
+                ])
+            : nil
         var governor = ResourceGovernor()
         var y = 0
         var completedPixels = 0
         let started = Date()
         while y < plan.height {
             try Task.checkCancellation()
-            let rowSide = governor.coreSide
-            let requestedSide = rowSide + 2 * JobPlan.padding
+            let thermalState = ProcessInfo.processInfo.thermalState
+            let rowSide = usesWebPhoto
+                ? (memoryWarning || thermalState == .serious || thermalState == .critical ? 256 : 384)
+                : governor.coreSide
+            let requestedSide = usesWebPhoto ? 512 : rowSide + 2 * JobPlan.padding
             let variantChanged = loadedSide != requestedSide
             if variantChanged {
                 model = nil
                 context.clearCaches()
-                let variantURL = requestedSide == 96 ? modelURL : modelURL.deletingLastPathComponent()
+                let variantURL = usesWebPhoto || requestedSide == 96 ? modelURL : modelURL.deletingLastPathComponent()
                     .appendingPathComponent(modelURL.deletingPathExtension().lastPathComponent + "-\(requestedSide).mlmodelc")
                 model = try MLModel(contentsOf: variantURL, configuration: configuration)
                 loadedSide = requestedSide
@@ -100,26 +126,55 @@ public actor UpscaleEngine {
                 await status(memoryWarning ? "Ajustando carga por memoria…" : thermal == .serious ? "Ajustando carga por temperatura…" : "Reescalando…")
                 let width = min(rowSide, plan.width - x)
                 try autoreleasepool {
-                    let side = rowSide + 2 * JobPlan.padding
+                    let side = requestedSide
+                    let padding = (side - rowSide) / 2
                     var buffer: CVPixelBuffer?
                     guard CVPixelBufferCreate(kCFAllocatorDefault, side, side, kCVPixelFormatType_32BGRA,
                         [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary, &buffer) == kCVReturnSuccess,
                         let buffer else { throw UpscaleError.tooLarge }
-                    let region = CGRect(x: x - JobPlan.padding, y: y - JobPlan.padding, width: side, height: side)
+                    let region = CGRect(x: x - padding, y: y - padding, width: side, height: side)
                     let patch = rgb.cropped(to: region).transformed(by: .init(translationX: -region.minX, y: -region.minY))
                     context.render(patch, to: buffer, bounds: CGRect(x: 0, y: 0, width: side, height: side), colorSpace: colorSpace)
-                    let features = try MLDictionaryFeatureProvider(dictionary: ["input": MLFeatureValue(pixelBuffer: buffer)])
+                    let features = try MLDictionaryFeatureProvider(dictionary: [
+                        usesWebPhoto ? "image" : "input": MLFeatureValue(pixelBuffer: buffer)
+                    ])
                     let prediction = try activeModel.prediction(from: features)
-                    guard let array = prediction.featureValue(for: "output")?.multiArrayValue else {
-                        throw UpscaleError.invalidPrediction
+                    let neural: CIImage
+                    if usesWebPhoto {
+                        guard let pixels = prediction.featureValue(for: "upscaled")?.imageBufferValue,
+                              CVPixelBufferGetWidth(pixels) == side * nativeScale,
+                              CVPixelBufferGetHeight(pixels) == side * nativeScale else {
+                            throw UpscaleError.invalidPrediction
+                        }
+                        neural = CIImage(cvPixelBuffer: pixels, options: [.colorSpace: colorSpace])
+                    } else {
+                        guard let array = prediction.featureValue(for: "output")?.multiArrayValue else {
+                            throw UpscaleError.invalidPrediction
+                        }
+                        neural = try TensorImage.makeFloating(array, side: side * nativeScale,
+                                                               colorSpace: colorSpace)
                     }
-                    let output = try TensorImage.make(array, side: side * 4, colorSpace: colorSpace)
-                    // Resample with context still present, then crop; avoids independent hard-edge resampling.
-                    let resized = CIImage(cgImage: output).applyingFilter("CILanczosScaleTransform", parameters: [
-                        kCIInputScaleKey: Double(scale) / 4, kCIInputAspectRatioKey: 1.0
-                    ]).transformed(by: .init(translationX: CGFloat((x - JobPlan.padding) * scale), y: CGFloat((y - JobPlan.padding) * scale)))
+                    // Avoid interpolating a native-resolution prediction. Other scales
+                    // resample with context *before* cropping, preventing edge seams.
+                    let resized = (scale == nativeScale ? neural : neural.applyingFilter("CILanczosScaleTransform", parameters: [
+                        kCIInputScaleKey: Double(scale) / Double(nativeScale), kCIInputAspectRatioKey: 1.0
+                    ])).transformed(by: .init(translationX: CGFloat((x - padding) * scale), y: CGFloat((y - padding) * scale)))
                     let rect = CGRect(x: x * scale, y: y * scale, width: width * scale, height: rowHeight * scale)
-                    let restored = resized.applyingFilter("CIBlendWithAlphaMask", parameters: [
+                    let neuralOrBlend: CIImage
+                    if let sourceReference {
+                        // Mask luminance (rather than mask alpha) controls the
+                        // blend: gray 0.25 means 25% neural and 75% original.
+                        let mask = CIImage(color: CIColor(
+                            red: neuralWeight, green: neuralWeight, blue: neuralWeight, alpha: 1
+                        )).cropped(to: rect)
+                        neuralOrBlend = resized.applyingFilter("CIBlendWithMask", parameters: [
+                            kCIInputBackgroundImageKey: sourceReference,
+                            kCIInputMaskImageKey: mask
+                        ])
+                    } else {
+                        neuralOrBlend = resized
+                    }
+                    let restored = neuralOrBlend.applyingFilter("CIBlendWithAlphaMask", parameters: [
                         kCIInputBackgroundImageKey: CIImage(color: .clear).cropped(to: rect),
                         kCIInputMaskImageKey: alpha
                     ])
@@ -138,7 +193,7 @@ public actor UpscaleEngine {
                     try await Task.sleep(for: .milliseconds(30))
                 }
             }
-            if constrained || !variantChanged {
+            if !usesWebPhoto && (constrained || !variantChanged) {
                 governor.observe(secondsPerPixel: Date().timeIntervalSince(rowStarted) / Double(plan.width * rowHeight), constrained: constrained)
             }
             logger.debug("Adaptive row core=\(rowSide) next=\(governor.coreSide) constrained=\(constrained)")
@@ -156,7 +211,7 @@ public actor UpscaleEngine {
             guard CGImageDestinationFinalize(writer) else { throw UpscaleError.invalidImage }
             try Task.checkCancellation()
             await progress(1)
-            logger.info("Completed mode=\(mode.rawValue) scale=\(scale) seconds=\(Date().timeIntervalSince(started))")
+            logger.info("Completed mode=\(mode.rawValue) neuralWeight=\(neuralWeight) nativeScale=\(nativeScale) scale=\(scale) seconds=\(Date().timeIntervalSince(started))")
             return destination
         } catch {
             try? FileManager.default.removeItem(at: destination)

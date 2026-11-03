@@ -17,7 +17,11 @@ final class CoreMLParityTests: XCTestCase {
         }
         let context = CIContext()
         let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
-        for (name, path) in [("Anime4x", anime), ("Photo4x", photo)] {
+        var models: [(String, String, Int)] = [("Anime4x", anime, 4), ("Photo4x", photo, 4)]
+        if let native2 = env["DEFUPSCALER_PHOTO2_MODEL"] {
+            models.append(("Photo2x", native2, 2))
+        }
+        for (name, path, nativeScale) in models {
             let base = URL(fileURLWithPath: path)
             for inputSide in [96, 160, 224] {
                 let variant = inputSide == 96 ? name : "\(name)-\(inputSide)"
@@ -28,7 +32,7 @@ final class CoreMLParityTests: XCTestCase {
                 let config = MLModelConfiguration()
                 config.computeUnits = .cpuOnly
                 let model = try MLModel(contentsOf: modelURL, configuration: config)
-                let outputSide = inputSide * 4
+                let outputSide = inputSide * nativeScale
                 let folder = URL(fileURLWithPath: fixtureRoot).appendingPathComponent(variant)
                 for sample in 0..<2 {
                     let imageURL = folder.appendingPathComponent("input-\(sample).png")

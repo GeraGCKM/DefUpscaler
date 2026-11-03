@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import ImageIO
+import CoreImage
 import UniformTypeIdentifiers
 import UpscaleCore
 import OSLog
@@ -12,14 +13,17 @@ struct QueueItem: Identifiable {
     var saved = false
     var state = "Pendiente"
     var outputScale: Int?
+    var proFidelity = false
 }
 
 struct LoadedPreview: @unchecked Sendable {
     let image: CGImage
     let metadata: ImageMetadata
+    let averageColor: (Double, Double, Double)
 }
 
 actor PreviewLoader {
+    private let colorContext = CIContext(options: [.cacheIntermediates: false])
     func load(_ url: URL, full: Bool) throws -> LoadedPreview {
         try Task.checkCancellation()
         let access = url.startAccessingSecurityScopedResource()
@@ -34,7 +38,21 @@ actor PreviewLoader {
                 kCGImageSourceThumbnailMaxPixelSize: full ? max(metadata.width, metadata.height) : 1400
               ] as CFDictionary) else { throw UpscaleError.invalidImage }
         try Task.checkCancellation()
-        return LoadedPreview(image: cg, metadata: metadata)
+        let average = CIImage(cgImage: cg).applyingFilter("CIAreaAverage", parameters: [
+            kCIInputExtentKey: CIVector(cgRect: CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
+        ])
+        var pixel = [UInt8](repeating: 0, count: 4)
+        pixel.withUnsafeMutableBytes { raw in
+            guard let pointer = raw.baseAddress else { return }
+            colorContext.render(average, toBitmap: pointer, rowBytes: 4,
+                                bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                                format: .RGBA8,
+                                colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!)
+        }
+        return LoadedPreview(image: cg, metadata: metadata,
+                             averageColor: (Double(pixel[0]) / 255,
+                                            Double(pixel[1]) / 255,
+                                            Double(pixel[2]) / 255))
     }
 }
 
@@ -43,10 +61,13 @@ final class AppModel: ObservableObject {
     @Published var items: [QueueItem] = []
     @Published var selectedID: UUID?
     @Published var preview: NSImage?
+    @Published var ambiance: Color = Color.gray
+    @Published var previewItemID: UUID?
     @Published var metadata: ImageMetadata?
     @Published var previewRevision = UUID()
     @Published var scale = 4
     @Published var mode: ImageMode = .illustration
+    @Published var proFidelity = false
     @Published var running = false
     @Published var loading = false
     @Published var saving = false
@@ -73,13 +94,20 @@ final class AppModel: ObservableObject {
     }
     var estimatedMemory: String {
         guard let metadata else { return "" }
-        let multiplier = showingResult && selected?.result != nil ? 1 : scale
-        let bytes = Int64(metadata.width) * Int64(metadata.height) * Int64(multiplier * multiplier) * 24 + 768 * 1024 * 1024
+        let resultVisible = showingResult && selected?.result != nil
+        let sourceScale = resultVisible ? (selected?.outputScale ?? scale) : 1
+        let sourceWidth = metadata.width / max(1, sourceScale)
+        let sourceHeight = metadata.height / max(1, sourceScale)
+        let outputScale = resultVisible ? (selected?.outputScale ?? scale) : scale
+        let bytes = Int64(sourceWidth) * Int64(sourceHeight) * Int64(outputScale * outputScale) * 24 + 768 * 1024 * 1024
         return "Presupuesto estimado: " + ByteCountFormatter.string(fromByteCount: bytes, countStyle: .memory) + ". No es una medición del pico real."
     }
     var dimensions: String {
         guard let metadata else { return "" }
-        if showingResult, selected?.result != nil { return "\(metadata.width) × \(metadata.height)" }
+        if showingResult, selected?.result != nil {
+            let multiplier = max(1, selected?.outputScale ?? 1)
+            return "\(metadata.width / multiplier) × \(metadata.height / multiplier) → \(metadata.width) × \(metadata.height)"
+        }
         return "\(metadata.width) × \(metadata.height) → \(metadata.width * scale) × \(metadata.height * scale)"
     }
 
@@ -112,6 +140,9 @@ final class AppModel: ObservableObject {
                 guard generation == token, !Task.isCancelled else { return }
                 // Keep the old image visible until its replacement is decoded.
                 preview = NSImage(cgImage: loaded.image, size: .zero)
+                ambiance = Color(red: loaded.averageColor.0, green: loaded.averageColor.1,
+                                 blue: loaded.averageColor.2)
+                previewItemID = selected.id
                 metadata = loaded.metadata
                 previewRevision = UUID()
                 if loaded.metadata.depth > 8 {
@@ -121,7 +152,7 @@ final class AppModel: ObservableObject {
                 }
             } catch is CancellationError {} catch {
                 guard generation == token else { return }
-                preview = nil; metadata = nil; previewRevision = UUID()
+                preview = nil; previewItemID = nil; metadata = nil; previewRevision = UUID()
                 message = error.localizedDescription
             }
             if generation == token { loading = false }
@@ -130,7 +161,10 @@ final class AppModel: ObservableObject {
     func start() {
         guard !running, hasPending else { return }
         let jobScale = scale
-        let jobMode = mode
+        let quality = QualityPlanner.make(
+            mode: mode, scale: scale, pro: proFidelity,
+            hasWebPhoto: Bundle.main.url(forResource: "WebPhoto4x", withExtension: "mlmodelc") != nil
+        )
         running = true
         message = nil
         task = Task(priority: .utility) {
@@ -142,13 +176,16 @@ final class AppModel: ObservableObject {
                 items[index].state = "En proceso"
                 progress = 0
                 do {
-                    let output = try await engine.process(url: input, scale: jobScale, mode: jobMode,
+                    let output = try await engine.process(
+                        url: input, scale: jobScale, mode: quality.mode,
+                        neuralWeight: quality.neuralWeight,
                         progress: { [weak self] value in await self?.setProgress(value) },
                         status: { [weak self] value in await self?.setPhase(value) })
                     if Task.isCancelled { try? FileManager.default.removeItem(at: output); throw CancellationError() }
                     if let i = items.firstIndex(where: { $0.id == id }) {
                         items[i].result = output
                         items[i].outputScale = jobScale
+                        items[i].proFidelity = quality.isPro
                         items[i].state = "Listo"
                     }
                     if selectedID == id { showingResult = true; refreshPreview() }
@@ -174,8 +211,12 @@ final class AppModel: ObservableObject {
         start()
     }
     func cancel() { task?.cancel() }
-    private func setProgress(_ value: Double) { progress = value }
-    private func setPhase(_ value: String) { phase = value }
+    private func setProgress(_ value: Double) {
+        if value >= 1 || abs(value - progress) >= 0.002 { progress = value }
+    }
+    private func setPhase(_ value: String) {
+        if phase != value { phase = value }
+    }
     func retryFailed() {
         guard !running else { return }
         for i in items.indices where items[i].result == nil { items[i].state = "Pendiente" }
@@ -242,6 +283,6 @@ final class AppModel: ObservableObject {
         guard !running, !saving, confirmDiscard() else { return }
         previewTask?.cancel(); generation = UUID()
         for item in items { if let result = item.result { try? FileManager.default.removeItem(at: result) } }
-        items = []; selectedID = nil; preview = nil; metadata = nil; loading = false; message = nil; progress = 0
+        items = []; selectedID = nil; preview = nil; previewItemID = nil; metadata = nil; loading = false; message = nil; progress = 0
     }
 }

@@ -32,22 +32,42 @@ jobs:
         run: python -m pip install -r scripts/requirements-model.txt
       - name: Convert and validate model
         run: python scripts/convert_model.py
+      - name: Fetch optional photographic RealPLKSR model with pinned archive checksum
+        run: python3 scripts/fetch_realplksr.py
+        continue-on-error: true
       - name: PROVISIONAL - Native Core ML/PyTorch numerical parity
         run: |
           for model in build/models/*.mlpackage; do
             xcrun coremlcompiler compile "$model" build/models
           done
-          DEFUPSCALER_TEST_MODEL="$PWD/build/models/Anime4x.mlmodelc" DEFUPSCALER_PHOTO_MODEL="$PWD/build/models/Photo4x.mlmodelc" DEFUPSCALER_PARITY_DIR="$PWD/build/models/parity" swift test --filter CoreMLParityTests
+          DEFUPSCALER_TEST_MODEL="$PWD/build/models/Anime4x.mlmodelc" DEFUPSCALER_PHOTO_MODEL="$PWD/build/models/Photo4x.mlmodelc" DEFUPSCALER_PHOTO2_MODEL="$PWD/build/models/Photo2x.mlmodelc" DEFUPSCALER_PARITY_DIR="$PWD/build/models/parity" swift test --filter CoreMLParityTests
       - name: End-to-end Core ML image test
         run: |
           for model in build/models/*.mlpackage; do
             xcrun coremlcompiler compile "$model" build/models
           done
-          DEFUPSCALER_TEST_MODEL="$PWD/build/models/Anime4x.mlmodelc" DEFUPSCALER_PHOTO_MODEL="$PWD/build/models/Photo4x.mlmodelc" swift test --filter EngineIntegrationTests
+          DEFUPSCALER_TEST_MODEL="$PWD/build/models/Anime4x.mlmodelc" DEFUPSCALER_PHOTO_MODEL="$PWD/build/models/Photo4x.mlmodelc" DEFUPSCALER_PHOTO2_MODEL="$PWD/build/models/Photo2x.mlmodelc" swift test --filter EngineIntegrationTests
+      - name: Test optional RealPLKSR native inferencing
+        run: |
+          if [[ -d build/models/WebPhoto4x.mlmodelc ]]; then
+            DEFUPSCALER_WEBPHOTO_MODEL="$PWD/build/models/WebPhoto4x.mlmodelc" swift test --filter testWebPhotoFourTimes
+          fi
+      - name: Compare restoration models on a deterministic reference
+        continue-on-error: true
+        run: |
+          if [[ -d build/models/WebPhoto4x.mlmodelc ]]; then
+            DEFUPSCALER_PHOTO_MODEL="$PWD/build/models/Photo4x.mlmodelc" DEFUPSCALER_PHOTO2_MODEL="$PWD/build/models/Photo2x.mlmodelc" DEFUPSCALER_WEBPHOTO_MODEL="$PWD/build/models/WebPhoto4x.mlmodelc" swift test --filter testSyntheticModelComparison
+            python scripts/report_quality.py build/quality
+          fi
       - name: Package application
         run: bash scripts/package.sh
       - name: Validate bundled model resources
-        run: DEFUPSCALER_TEST_MODEL="$PWD/build/DefUpscaler.app/Contents/Resources/Anime4x.mlmodelc" DEFUPSCALER_PHOTO_MODEL="$PWD/build/DefUpscaler.app/Contents/Resources/Photo4x.mlmodelc" swift test --filter EngineIntegrationTests
+        run: DEFUPSCALER_TEST_MODEL="$PWD/build/DefUpscaler.app/Contents/Resources/Anime4x.mlmodelc" DEFUPSCALER_PHOTO_MODEL="$PWD/build/DefUpscaler.app/Contents/Resources/Photo4x.mlmodelc" DEFUPSCALER_PHOTO2_MODEL="$PWD/build/DefUpscaler.app/Contents/Resources/Photo2x.mlmodelc" swift test --filter EngineIntegrationTests
+      - name: Validate bundled optional RealPLKSR model
+        run: |
+          if [[ -d build/DefUpscaler.app/Contents/Resources/WebPhoto4x.mlmodelc ]]; then
+            DEFUPSCALER_WEBPHOTO_MODEL="$PWD/build/DefUpscaler.app/Contents/Resources/WebPhoto4x.mlmodelc" swift test --filter testWebPhotoFourTimes
+          fi
       - name: Launch and capture native UI
         run: bash scripts/capture-ui.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -58,6 +78,7 @@ jobs:
             build/SHA256SUMS.txt
             build/models/model-provenance.json
             build/screenshots/
+            build/quality/
           if-no-files-found: error
           retention-days: 14
       - name: Diagnose native crashes
