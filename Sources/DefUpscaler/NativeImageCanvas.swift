@@ -167,7 +167,7 @@ final class ComparisonDocumentView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         NSColor.textBackgroundColor.setFill()
-        NSRectFill(bounds)
+        NSBezierPath(rect: bounds).fill()
         guard let result else { return }
         NSGraphicsContext.current?.imageInterpolation = .high
         result.draw(in: bounds, from: .zero, operation: .sourceOver, fraction: 1)
@@ -180,7 +180,7 @@ final class ComparisonDocumentView: NSView {
         let adjusted = max(0.5, zoom)
         let line = NSRect(x: split - 0.9 / adjusted, y: 0, width: 1.8 / adjusted, height: bounds.height)
         NSColor.white.withAlphaComponent(0.92).setFill()
-        NSRectFill(line)
+        NSBezierPath(rect: line).fill()
         let radius = 15 / adjusted
         let grip = NSRect(x: split - radius, y: bounds.midY - radius,
                           width: 2 * radius, height: 2 * radius)
