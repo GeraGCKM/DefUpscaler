@@ -1,3 +1,15 @@
+# 0.3 provisional — native UX refinement
+
+- Replaced the monolithic queue expression with reusable async thumbnail cells and restrained hover/selection motion.
+- Unified the floating controls and the progress HUD in a native Liquid Glass container; their geometry responds together to state changes and to Reduce Motion / Reduce Transparency.
+- Retained the native NSScrollView across selection changes, fixed layout re-entry, and added spatial image-settle transitions with immediate trackpad pinch feedback.
+- Rebuilt the split comparator on cached Core Animation image layers and an animated mask, so divider movement does not continuously redraw the image pixels. Direct drag tracks the pointer; clicking elsewhere moves the divider quickly and continuously.
+- Added a three-color image-derived ambient backdrop, calculated once per preview on a background actor rather than using an expensive per-frame blur.
+- Kept the main toolbar limited to the actual task; the optional 75/25 photo fidelity mixture is available from macOS Settings instead of another permanent control.
+- Added explicit optional JPEG export, preserving PNG by default and compositing alpha onto white only when the user selects JPEG. Batch export remains PNG.
+- Preserved native Core ML, queue, autosizing, offline privacy and the working v0.3 model selection.
+- No claim of on-device M5 visual/thermal acceptance or full HDR support.
+
 # 0.3 provisional
 
 - Optional RealPLKSR/NomosWebPhoto Core ML photographic alternative with pinned compiled-model archive and native pixel-buffer inference tests.
