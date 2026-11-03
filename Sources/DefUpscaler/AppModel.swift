@@ -43,6 +43,7 @@ final class AppModel: ObservableObject {
     @Published var items: [QueueItem] = []
     @Published var selectedID: UUID?
     @Published var preview: NSImage?
+    @Published var previewItemID: UUID?
     @Published var metadata: ImageMetadata?
     @Published var previewRevision = UUID()
     @Published var scale = 4
@@ -119,6 +120,7 @@ final class AppModel: ObservableObject {
                 guard generation == token, !Task.isCancelled else { return }
                 // Keep the old image visible until its replacement is decoded.
                 preview = NSImage(cgImage: loaded.image, size: .zero)
+                previewItemID = selected.id
                 metadata = loaded.metadata
                 previewRevision = UUID()
                 if loaded.metadata.depth > 8 {
@@ -128,7 +130,7 @@ final class AppModel: ObservableObject {
                 }
             } catch is CancellationError {} catch {
                 guard generation == token else { return }
-                preview = nil; metadata = nil; previewRevision = UUID()
+                preview = nil; previewItemID = nil; metadata = nil; previewRevision = UUID()
                 message = error.localizedDescription
             }
             if generation == token { loading = false }
@@ -253,6 +255,6 @@ final class AppModel: ObservableObject {
         guard !running, !saving, confirmDiscard() else { return }
         previewTask?.cancel(); generation = UUID()
         for item in items { if let result = item.result { try? FileManager.default.removeItem(at: result) } }
-        items = []; selectedID = nil; preview = nil; metadata = nil; loading = false; message = nil; progress = 0
+        items = []; selectedID = nil; preview = nil; previewItemID = nil; metadata = nil; loading = false; message = nil; progress = 0
     }
 }

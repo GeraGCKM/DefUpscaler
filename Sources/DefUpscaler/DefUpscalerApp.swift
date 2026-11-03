@@ -49,6 +49,21 @@ struct DefUpscalerApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("Añadir imágenes…", action: model.choose).keyboardShortcut("o")
                 Button("Guardar resultado…", action: model.save).keyboardShortcut("s").disabled(model.selected?.result == nil || model.saving)
+                Button("Guardar todos…", action: model.saveAll)
+                    .keyboardShortcut("s", modifiers: [.command, .shift])
+                    .disabled(!model.hasResults || model.saving)
+                Button("Ajustar a ventana") {
+                    model.actualSize = false
+                    model.refreshPreview()
+                }.keyboardShortcut("0", modifiers: .command)
+                Button("Tamaño real") {
+                    model.actualSize = true
+                    model.refreshPreview()
+                }.keyboardShortcut("1", modifiers: .command).disabled(model.preview == nil)
+                Button("Mostrar u ocultar resultados") {
+                    model.showingResult.toggle()
+                    model.refreshPreview()
+                }.keyboardShortcut("d", modifiers: .command).disabled(model.selected?.result == nil)
             }
         }
         Settings {
@@ -97,7 +112,10 @@ struct ContentView: View {
     @State private var compareToken = UUID()
     @State private var dividerDragStart: CGFloat?
     private var movement: Animation? { reduceMotion ? nil : .smooth(duration: 0.24) }
-    private var canCompare: Bool { model.selected?.result != nil && original != nil }
+    private var canCompare: Bool {
+        model.selected?.result != nil && original != nil &&
+        model.previewItemID == model.selectedID && model.showingResult
+    }
 
     var body: some View {
         VStack(spacing: 0) {

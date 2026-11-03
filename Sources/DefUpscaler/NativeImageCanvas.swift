@@ -33,6 +33,7 @@ struct NativeImageCanvas: NSViewRepresentable {
             coordinator?.onToggleActualSize?()
         }
         scroll.documentView = document
+        document.wantsLayer = true
         context.coordinator.scroll = scroll
         context.coordinator.document = document
         scroll.onLayout = { [weak coordinator = context.coordinator] in coordinator?.layout() }
@@ -44,8 +45,16 @@ struct NativeImageCanvas: NSViewRepresentable {
         coordinator.onToggleActualSize = onToggleActualSize
         coordinator.reduceMotion = reduceMotion
         coordinator.actualPixels = max(1, imagePixelWidth)
+        if coordinator.document?.result !== result, !reduceMotion, coordinator.document?.result != nil {
+            let transition = CATransition()
+            transition.type = .fade
+            transition.duration = 0.18
+            transition.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            coordinator.document?.layer?.add(transition, forKey: "preview-transition")
+        }
         coordinator.document?.result = result
         coordinator.document?.original = original
+        coordinator.document?.reducedMotion = reduceMotion
         coordinator.document?.comparing = comparing && original != nil
         coordinator.document?.setNeedsDisplay(coordinator.document?.bounds ?? .zero)
         if coordinator.identity != identity {
@@ -137,6 +146,7 @@ final class ComparisonDocumentView: NSView {
     var result: NSImage?
     var original: NSImage?
     var comparing = false
+    var reducedMotion = false
     var zoom: CGFloat = 1 {
         didSet { if zoom != oldValue { needsDisplay = true } }
     }
@@ -202,10 +212,14 @@ final class ComparisonDocumentView: NSView {
             // The next mouseDragged event writes the actual pointer location.
         } else {
             let newValue = min(1, max(0, position.x / max(1, bounds.width)))
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.13
-                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                animator().divider = newValue
+            if reducedMotion {
+                divider = newValue
+            } else {
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.13
+                    context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                    animator().divider = newValue
+                }
             }
         }
     }
