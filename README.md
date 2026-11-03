@@ -1,6 +1,6 @@
 # DefUpscaler 0.3 — provisional build
 
-> **Provisional 0.3 build.** GitHub Actions passed native Core ML numerical parity and packaged inference on macOS; real Mac M5 thermal, multitasking, alpha-edge and UI acceptance remain outstanding. This is not a signed/notarized production release. See [the temporary validation report](docs/PROVISIONAL_COREML_VALIDATION.md).
+> **Provisional 0.3 development build.** The Core ML pipeline passed earlier native tests and packaging, but every new commit needs its own GitHub Actions result. On-device Mac M5 gesture, color, alpha, performance and subjective quality acceptance remain outstanding. This is not a signed/notarized production release.
 
 A small native macOS app for **drop → choose mode and scale → upscale → save**. SwiftUI/AppKit + Core ML. Offline image processing, no accounts, telemetry, runtime Python or third-party Swift dependencies. Apple Silicon, macOS 14+; native Liquid Glass controls on macOS 26+.
 
@@ -13,8 +13,8 @@ Download the ZIP from the artifact of a successful [macOS app run](https://githu
 - Drop one or more images, double-click the preview area, or press ⌘O.
 - Choose **Ilustración / anime**, **Fotografía**, or (when included) **Fotografía · textura**, then 2×, 4×, 8× or 16×.
 - Press **Reescalar**. A batch runs sequentially; failures do not discard completed results.
-- Toggle Original/Resultado to compare. The ⋯ menu offers 100% view, batch export, retry and cleanup. Appearance settings live only in the macOS application menu (⌘,).
-- Press **Guardar** or use **Guardar todos**. Original files are protected. Existing results remain in the queue when you add images. Closing/resetting warns about unsaved results.
+- Compare original and result with the small split-view control. Drag the divider directly; clicking elsewhere moves it swiftly to that location. Pan with two fingers and pinch to zoom around the native gesture position. The ⋯ menu offers 100% view, batch export, retry and cleanup. All persistent settings live only in the native macOS application menu (⌘,).
+- Press **Guardar** to export PNG or JPEG; **Guardar todos** exports lossless PNGs. JPEG composites transparency onto white. Originals remain untouched. Existing results stay in the queue when you add images, and closing/resetting warns about unsaved results.
 
 ## Model and output contract
 
@@ -26,7 +26,7 @@ Download the ZIP from the artifact of a successful [macOS app run](https://githu
 
 Illustration uses an official native 4× model. Photography at 2× prefers the official RealESRGAN_x2plus native 2× model; other photographic scales use 4×. **8× and 16× use a neural inference followed by Lanczos resizing**, not additional recovered detail or a native 16× model. The app does not claim that Lanczos itself adds AI detail. RealPLKSR is an additional restoration model; it may sharpen or synthesize textures, so compare the output with the source before relying on fine detail. Output is capped at 64 MP and a conservative memory estimate; some inputs/scales are rejected before decoding.
 
-Output: **8-bit SDR sRGB PNG with alpha**. Color is converted to sRGB; original ICC profiles and other metadata are not copied. Alpha is resampled separately from neural RGB; no face reconstruction is applied. Images reported above 8-bit depth are rejected. HEIC with an HDR gain map uses its SDR base image; the HDR enhancement is not retained. This version does **not** claim end-to-end HDR output. Confirm suitability before using it for HDR/print workflows.
+Output: **8-bit SDR sRGB PNG with alpha**, or high-quality **JPEG with a white background** when selected in the save dialog. Color is converted to sRGB; original ICC profiles and other metadata are not copied. Alpha is resampled separately from neural RGB; no face reconstruction is applied. Images reported above 8-bit depth are rejected. HEIC with an HDR gain map uses its SDR base image; the HDR enhancement is not retained. This version does **not** claim end-to-end HDR output. Confirm suitability before using it for HDR/print workflows.
 
 ## Adaptive resources
 
@@ -56,6 +56,13 @@ CI verifies Swift tests, three Real-ESRGAN model profiles against PyTorch, image
 ## Cleanup
 
 The selected bundled models live in the app bundle. Unsaved outputs are in the app's temporary `DefUpscaler` directory; replacing the session, normal exit and the next launch after a crash clean them. Appearance is stored in the app's own preferences (`io.geragckm.DefUpscaler`). Exported images are retained. OS-managed Core ML caches, logs and quarantine metadata are not promised to disappear when the app is removed.
+
+## Native interface details
+
+- One continuous AppKit canvas is retained across image selections, avoiding scroll-view reconstruction. A short Core Animation transition accompanies a new image; a native GlassEffectContainer coordinates the floating action bar and processing status.
+- The comparison composites two cached image layers using a moving mask; moving the divider does not re-render the underlying full images on every pointer event.
+- The ambient workspace uses three small area-average samples of the preview, computed off the main thread. There is no live full-image blur or timer-driven idle rendering.
+- The advanced 75/25 photographic fidelity mixture is optional and lives in macOS Settings, keeping the main workspace dedicated to mode, scale, compare and save. It is **not** guaranteed to be superior to the normal neural output.
 
 ## Native navigation and accessibility
 
