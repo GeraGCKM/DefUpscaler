@@ -38,3 +38,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## RealESRGAN_x2plus
 
 Photo2x is the upstream RealESRGAN_x2plus official checkpoint from the [Real-ESRGAN project](https://github.com/xinntao/Real-ESRGAN), subject to its BSD-3-Clause license. The model is downloaded at build time and validated against a pinned SHA-256 in scripts/convert_model.py. See also the model-provenance.json bundled with the application.
+
+## Optional 4xNomosWebPhoto_RealPLKSR model
+
+Model creator: Philip Hofmann (Phips). Released under **Creative Commons Attribution 4.0 International (CC BY 4.0)**. License text: https://creativecommons.org/licenses/by/4.0/legalcode . Source checkpoint and training description: https://huggingface.co/Phips/4xNomosWebPhoto_RealPLKSR . The compiled Core ML adaptation is distributed by 333i: https://huggingface.co/333i/4xNomosWebPhoto_RealPLKSR-coreml-ios . The checkpoint is not altered or retrained by DefUpscaler. The conversion is pinned by archive SHA-256 `187b0c2fa3c2cb3bd20aef647e68a07e61316559e41bd53bfaa72090facb51be`. No affiliation or endorsement by either creator is implied.

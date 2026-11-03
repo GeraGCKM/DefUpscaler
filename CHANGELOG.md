@@ -1,5 +1,10 @@
 # 0.3 provisional
 
+- Optional RealPLKSR/NomosWebPhoto Core ML photographic alternative with pinned compiled-model archive and native pixel-buffer inference tests.
+- Native NSScrollView comparison canvas for trackpad pan/pinch zoom, instant divider drag, rapid click transitions and shared original/result framing.
+- Intermediate Float16 Core Image output eliminates early 8-bit rounding before final down/up-resampling.
+- Keyboard shortcuts and stale-preview comparison guards; existing batch/save/cancel behavior retained.
+
 - Model catalog with immutable checkpoint and Core ML input/output contracts.
 - RealESRGAN_x2plus available as native photo 2× inference, with x4 fallback.
 - Avoids Lanczos when the network already outputs the requested scale.
