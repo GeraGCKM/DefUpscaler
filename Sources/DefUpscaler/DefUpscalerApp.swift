@@ -113,6 +113,7 @@ struct ContentView: View {
     @State private var compare = true
     @State private var showQueue = true
     @State private var original: NSImage?
+    @State private var originalItemID: UUID?
     @State private var compareToken = UUID()
     private var movement: Animation? { reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.88) }
     private var canCompare: Bool {
@@ -217,6 +218,7 @@ struct ContentView: View {
                 // Preserve the same native scroll view across selections: the
                 // AppKit canvas performs a real interruptible content transition.
                 .accessibilityLabel("Imagen, desplaza con dos dedos o pellizca para ampliar")
+                .transition(reduceMotion ? .opacity : .scale(scale: 0.965).combined(with: .opacity))
             } else {
                 VStack(spacing: 12) {
                     Image(systemName: "photo.on.rectangle.angled")
@@ -377,8 +379,12 @@ struct ContentView: View {
     private func loadComparison() {
         let token = UUID()
         compareToken = token
-        original = nil
-        guard let selected = model.selected, let url = selected.result else { return }
+        if originalItemID != model.selectedID { original = nil }
+        guard let selected = model.selected, let url = selected.result else {
+            original = nil
+            originalItemID = nil
+            return
+        }
         let full = model.actualSize || model.detailedPreview
         Task.detached(priority: .userInitiated) {
             let source = CGImageSourceCreateWithURL(selected.input as CFURL, nil)
@@ -392,6 +398,7 @@ struct ContentView: View {
             await MainActor.run {
                 guard compareToken == token, model.selectedID == selected.id, model.selected?.result == url else { return }
                 original = cg.map { NSImage(cgImage: $0, size: .zero) }
+                originalItemID = selected.id
             }
         }
     }

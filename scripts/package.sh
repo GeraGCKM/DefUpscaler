@@ -26,4 +26,5 @@ python3 scripts/deduplicate-weights.py "$APP/Contents/Resources"
 codesign --force --deep --sign - "$APP"
 codesign --verify --deep --strict "$APP"
 ditto -c -k --sequesterRsrc --keepParent "$APP" build/DefUpscaler-macOS-AppleSilicon.zip
+unzip -tq build/DefUpscaler-macOS-AppleSilicon.zip
 shasum -a 256 build/DefUpscaler-macOS-AppleSilicon.zip > build/SHA256SUMS.txt
