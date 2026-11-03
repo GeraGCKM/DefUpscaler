@@ -1,0 +1,13 @@
+name: Probe optional RealPLKSR model
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Fetch and inspect archived model format
+        run: python3 scripts/probe_realplksr.py
