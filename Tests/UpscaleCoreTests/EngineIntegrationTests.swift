@@ -88,12 +88,15 @@ final class EngineIntegrationTests: XCTestCase {
         let space = CGColorSpace(name: CGColorSpace.sRGB)!
         let image = CIImage(color: .green).cropped(to: CGRect(x: 0, y: 0, width: 11, height: 7))
         try context.writePNGRepresentation(of: image, to: input, format: .RGBA8, colorSpace: space)
-        let output = try await UpscaleEngine(modelURL: URL(fileURLWithPath: path), modelScale: 2)
-            .process(url: input, scale: 2, mode: .photo) { _ in }
-        defer { try? FileManager.default.removeItem(at: output) }
-        let result = try XCTUnwrap(CIImage(contentsOf: output))
-        XCTAssertEqual(Int(result.extent.width), 22)
-        XCTAssertEqual(Int(result.extent.height), 14)
+        let engine = UpscaleEngine(modelURL: URL(fileURLWithPath: path), modelScale: 2)
+        for weight in [1.0, 0.25] {
+            let output = try await engine.process(url: input, scale: 2, mode: .photo,
+                                                  neuralWeight: weight) { _ in }
+            defer { try? FileManager.default.removeItem(at: output) }
+            let result = try XCTUnwrap(CIImage(contentsOf: output))
+            XCTAssertEqual(Int(result.extent.width), 22)
+            XCTAssertEqual(Int(result.extent.height), 14)
+        }
     }
 
     func testWebPhotoFourTimes() async throws {
@@ -113,20 +116,24 @@ final class EngineIntegrationTests: XCTestCase {
         try context.writePNGRepresentation(of: stroke.composited(over: bg), to: input,
                                            format: .RGBA8, colorSpace: color)
         let engine = UpscaleEngine(modelURL: URL(fileURLWithPath: model))
-        let output = try await engine.process(url: input, scale: 4, mode: .photoDetail) { _ in }
-        defer { try? FileManager.default.removeItem(at: output) }
-        guard let result = CIImage(contentsOf: output) else {
-            XCTFail("Model produced no image"); return
+        for weight in [1.0, 0.25] {
+            let output = try await engine.process(url: input, scale: 4, mode: .photoDetail,
+                                                   neuralWeight: weight) { _ in }
+            defer { try? FileManager.default.removeItem(at: output) }
+            guard let result = CIImage(contentsOf: output) else {
+                XCTFail("Model produced no image"); return
+            }
+            XCTAssertEqual(Int(result.extent.width), 36)
+            XCTAssertEqual(Int(result.extent.height), 28)
+            var sample = [UInt8](repeating: 0, count: 4)
+            sample.withUnsafeMutableBytes {
+                context.render(result, toBitmap: $0.baseAddress!, rowBytes: 4,
+                               bounds: CGRect(x: 28, y: 12, width: 1, height: 1),
+                               format: .RGBA8, colorSpace: color)
+            }
+            XCTAssertLessThanOrEqual(abs(Int(sample[3]) - 128), 2,
+                "Pro must preserve separate alpha restoration")
         }
-        XCTAssertEqual(Int(result.extent.width), 36)
-        XCTAssertEqual(Int(result.extent.height), 28)
-        var sample = [UInt8](repeating: 0, count: 4)
-        sample.withUnsafeMutableBytes {
-            context.render(result, toBitmap: $0.baseAddress!, rowBytes: 4,
-                           bounds: CGRect(x: 28, y: 12, width: 1, height: 1),
-                           format: .RGBA8, colorSpace: color)
-        }
-        XCTAssertLessThanOrEqual(abs(Int(sample[3]) - 128), 2)
     }
 
     func testAlreadyCancelledJobNeverLoadsModel() async throws {
