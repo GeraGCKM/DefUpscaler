@@ -55,8 +55,22 @@ public enum ModelCatalog {
         precision: "FP16 internal, Float32 output", colorSpace: "sRGB SDR",
         coreTileSizes: [64, 128, 192], context: 16, runtime: "Core ML macOS 14+")
 
+    public static let webPhoto4 = ModelDescriptor(
+        id: "nomos-webphoto-realplksr", version: "2024-05-28", architecture: "RealPLKSR",
+        resource: "WebPhoto4x",
+        source: "https://huggingface.co/Phips/4xNomosWebPhoto_RealPLKSR",
+        checkpointSHA256: "9be0228f98156a100d6636d99b373ed2785b999723f9adc4cca504329ab157f2",
+        license: "CC-BY-4.0", nativeScale: 4,
+        input: "RGB sRGB BGRA8 pixel buffer named image; fixed 512x512",
+        output: "RGB pixel buffer named upscaled; fixed 2048x2048",
+        normalization: "RGB / 255 inside compiled model",
+        precision: "FP16 internal, image output", colorSpace: "sRGB SDR",
+        coreTileSizes: [256, 384], context: 64,
+        runtime: "Core ML macOS 14+; optional bundled converted model")
+
     public static func select(mode: ImageMode, requestedScale: Int,
                               hasNativePhoto2x: Bool) -> ModelDescriptor {
+        if mode == .photoDetail { return webPhoto4 }
         if mode == .photo {
             return requestedScale == 2 && hasNativePhoto2x ? photo2 : photo4
         }
