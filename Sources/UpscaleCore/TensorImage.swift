@@ -1,5 +1,6 @@
 import CoreML
 import CoreGraphics
+import CoreImage
 
 /// Uses actual strides; never assumes a contiguous MLMultiArray layout.
 /// The model contract is RGB NCHW Float32 in [0,255].
@@ -26,5 +27,42 @@ enum TensorImage {
         }
         guard let image = canvas.makeImage() else { throw UpscaleError.invalidPrediction }
         return image
+    }
+}
+
+/// Preserves fractional neural output through Core Image resizing. The
+/// 8-bit PNG quantization is performed once, after scale and alpha compositing.
+/// The tensor contract is RGB Float32 [0,255], opaque unpremultiplied RGB.
+extension TensorImage {
+    static func makeFloating(_ array: MLMultiArray, side: Int,
+                             colorSpace: CGColorSpace) throws -> CIImage {
+        guard array.dataType == .float32,
+              array.shape.map(\.intValue) == [1, 3, side, side] else {
+            throw UpscaleError.invalidPrediction
+        }
+        let input = array.dataPointer.assumingMemoryBound(to: Float.self)
+        let strides = array.strides.map(\.intValue)
+        var data = Data(count: side * side * 4 * MemoryLayout<Float16>.size)
+        try data.withUnsafeMutableBytes { bytes in
+            guard let pointer = bytes.baseAddress?.assumingMemoryBound(to: UInt16.self) else {
+                throw UpscaleError.invalidPrediction
+            }
+            for y in 0..<side {
+                for x in 0..<side {
+                    let inputOffset = y * strides[2] + x * strides[3]
+                    let outputOffset = (y * side + x) * 4
+                    for c in 0..<3 {
+                        let sample = input[inputOffset + c * strides[1]]
+                        guard sample.isFinite else { throw UpscaleError.invalidPrediction }
+                        let normalized = max(Float(0), min(Float(255), sample)) / 255
+                        pointer[outputOffset + c] = Float16(normalized).bitPattern.littleEndian
+                    }
+                    pointer[outputOffset + 3] = Float16(1).bitPattern.littleEndian
+                }
+            }
+        }
+        return CIImage(bitmapData: data, bytesPerRow: side * 8,
+                       size: CGSize(width: side, height: side),
+                       format: .RGBAh, colorSpace: colorSpace)
     }
 }

@@ -122,10 +122,12 @@ public actor UpscaleEngine {
                     guard let array = prediction.featureValue(for: "output")?.multiArrayValue else {
                         throw UpscaleError.invalidPrediction
                     }
-                    let output = try TensorImage.make(array, side: side * nativeScale, colorSpace: colorSpace)
+                    // Keep fractional RGB until final PNG encoding. Intermediate
+                    // 8-bit rounding before Lanczos formerly discarded fine values.
+                    let neural = try TensorImage.makeFloating(array, side: side * nativeScale,
+                                                               colorSpace: colorSpace)
                     // Avoid interpolating a native-resolution prediction. Other scales
                     // resample with context *before* cropping, preventing edge seams.
-                    let neural = CIImage(cgImage: output)
                     let resized = (scale == nativeScale ? neural : neural.applyingFilter("CILanczosScaleTransform", parameters: [
                         kCIInputScaleKey: Double(scale) / Double(nativeScale), kCIInputAspectRatioKey: 1.0
                     ])).transformed(by: .init(translationX: CGFloat((x - JobPlan.padding) * scale), y: CGFloat((y - JobPlan.padding) * scale)))
