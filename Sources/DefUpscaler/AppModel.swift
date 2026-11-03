@@ -20,7 +20,9 @@ struct LoadedPreview: @unchecked Sendable {
     let image: CGImage
     let metadata: ImageMetadata
     let averageColor: (Double, Double, Double)
-}
+    let secondaryColor: (Double, Double, Double)
+    let tertiaryColor: (Double, Double, Double)
+
 
 actor PreviewLoader {
     private let colorContext = CIContext(options: [.cacheIntermediates: false])
@@ -38,21 +40,31 @@ actor PreviewLoader {
                 kCGImageSourceThumbnailMaxPixelSize: full ? max(metadata.width, metadata.height) : 1400
               ] as CFDictionary) else { throw UpscaleError.invalidImage }
         try Task.checkCancellation()
-        let average = CIImage(cgImage: cg).applyingFilter("CIAreaAverage", parameters: [
-            kCIInputExtentKey: CIVector(cgRect: CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
-        ])
-        var pixel = [UInt8](repeating: 0, count: 4)
-        pixel.withUnsafeMutableBytes { raw in
-            guard let pointer = raw.baseAddress else { return }
-            colorContext.render(average, toBitmap: pointer, rowBytes: 4,
-                                bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
-                                format: .RGBA8,
-                                colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!)
+        // Only three one-pixel reductions per import, off the main thread.
+        // The ambient scene uses gradients, never a continuously blurred image.
+        let image = CIImage(cgImage: cg)
+        let whole = CGRect(x: 0, y: 0, width: cg.width, height: cg.height)
+        let upper = CGRect(x: 0, y: CGFloat(cg.height) * 0.45,
+                           width: CGFloat(cg.width) * 0.65, height: CGFloat(cg.height) * 0.55)
+        let lower = CGRect(x: CGFloat(cg.width) * 0.35, y: 0,
+                           width: CGFloat(cg.width) * 0.65, height: CGFloat(cg.height) * 0.55)
+        func sample(_ region: CGRect) -> (Double, Double, Double) {
+            let average = image.applyingFilter("CIAreaAverage", parameters: [
+                kCIInputExtentKey: CIVector(cgRect: region)
+            ])
+            var pixel = [UInt8](repeating: 0, count: 4)
+            pixel.withUnsafeMutableBytes { raw in
+                guard let pointer = raw.baseAddress else { return }
+                colorContext.render(average, toBitmap: pointer, rowBytes: 4,
+                                    bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                                    format: .RGBA8,
+                                    colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!)
+            }
+            return (Double(pixel[0]) / 255, Double(pixel[1]) / 255,
+                    Double(pixel[2]) / 255)
         }
-        return LoadedPreview(image: cg, metadata: metadata,
-                             averageColor: (Double(pixel[0]) / 255,
-                                            Double(pixel[1]) / 255,
-                                            Double(pixel[2]) / 255))
+        return LoadedPreview(image: cg, metadata: metadata, averageColor: sample(whole),
+                             secondaryColor: sample(upper), tertiaryColor: sample(lower))
     }
 }
 
@@ -62,6 +74,8 @@ final class AppModel: ObservableObject {
     @Published var selectedID: UUID?
     @Published var preview: NSImage?
     @Published var ambiance: Color = Color.gray
+    @Published var ambianceSecondary: Color = Color.gray
+    @Published var ambianceTertiary: Color = Color.gray
     @Published var previewItemID: UUID?
     @Published var metadata: ImageMetadata?
     @Published var previewRevision = UUID()
@@ -141,7 +155,11 @@ final class AppModel: ObservableObject {
                 // Keep the old image visible until its replacement is decoded.
                 preview = NSImage(cgImage: loaded.image, size: .zero)
                 ambiance = Color(red: loaded.averageColor.0, green: loaded.averageColor.1,
-                                 blue: loaded.averageColor.2)
+                                  blue: loaded.averageColor.2)
+                ambianceSecondary = Color(red: loaded.secondaryColor.0, green: loaded.secondaryColor.1,
+                                          blue: loaded.secondaryColor.2)
+                ambianceTertiary = Color(red: loaded.tertiaryColor.0, green: loaded.tertiaryColor.1,
+                                         blue: loaded.tertiaryColor.2)
                 previewItemID = selected.id
                 metadata = loaded.metadata
                 previewRevision = UUID()
@@ -226,7 +244,8 @@ final class AppModel: ObservableObject {
     func save() {
         guard !saving, let selected, let result = selected.result else { return }
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.png]
+        panel.allowedContentTypes = [.png, .jpeg]
+        panel.message = "PNG conserva transparencia; JPEG utiliza un fondo blanco y compresión de alta calidad."
         panel.nameFieldStringValue = selected.input.deletingPathExtension().lastPathComponent + "-\(selected.outputScale ?? scale)x.png"
         guard panel.runModal() == .OK, let target = panel.url else { return }
         if target.resolvingSymlinksInPath().standardizedFileURL == selected.input.resolvingSymlinksInPath().standardizedFileURL {
@@ -261,8 +280,7 @@ final class AppModel: ObservableObject {
             for (id, source, destination) in jobs {
                 do {
                     try await Task.detached(priority: .utility) {
-                        let data = try Data(contentsOf: source, options: .mappedIfSafe)
-                        try data.write(to: destination, options: .atomic)
+                        try ImageExportWriter.write(from: source, to: destination)
                     }.value
                     if let i = items.firstIndex(where: { $0.id == id }) { items[i].saved = true }
                 } catch { failures += 1; message = error.localizedDescription }
