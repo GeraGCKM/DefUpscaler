@@ -90,6 +90,7 @@ final class AppModel: ObservableObject {
     @Published var message: String?
     @Published var showingResult = true
     @Published var actualSize = false
+    @Published private(set) var zoomRevision = UUID()
     @Published private(set) var detailedPreview = false
     private var task: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
@@ -140,6 +141,11 @@ final class AppModel: ObservableObject {
         select(items.last!.id)
     }
     func select(_ id: UUID) { detailedPreview = false; actualSize = false; selectedID = id; showingResult = true; refreshPreview() }
+    func setActualSize(_ enabled: Bool) {
+        actualSize = enabled
+        zoomRevision = UUID()
+        refreshPreview()
+    }
     func requestDetailedPreview() {
         guard !detailedPreview else { return }
         detailedPreview = true

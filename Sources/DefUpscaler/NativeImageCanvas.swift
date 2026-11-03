@@ -10,6 +10,7 @@ struct NativeImageCanvas: NSViewRepresentable {
     let comparing: Bool
     let identity: UUID?
     let actualSize: Bool
+    let zoomRevision: UUID
     let imagePixelWidth: Int
     let reduceMotion: Bool
     let onRequestDetail: () -> Void
@@ -46,13 +47,19 @@ struct NativeImageCanvas: NSViewRepresentable {
         scroll.onRequestDetail = onRequestDetail
         coordinator.onToggleActualSize = onToggleActualSize
         coordinator.reduceMotion = reduceMotion
+        let contentChanged = coordinator.identity != identity || coordinator.actualPixels != imagePixelWidth
         coordinator.actualPixels = max(1, imagePixelWidth)
+        if coordinator.zoomRevision != zoomRevision {
+            coordinator.zoomRevision = zoomRevision
+            coordinator.zoomRequested = true
+            scroll.userMagnified = false
+        }
         if let document = coordinator.document {
             let shouldCompare = comparing && original != nil
             let imageChanged = document.result !== result
             let originalChanged = document.original !== original
             if imageChanged || originalChanged || document.comparing != shouldCompare {
-                if imageChanged, !reduceMotion, document.result != nil {
+                if imageChanged, contentChanged, !reduceMotion, document.result != nil {
                     let transition = CATransition()
                     transition.type = .fade
                     transition.duration = 0.18
@@ -88,6 +95,8 @@ struct NativeImageCanvas: NSViewRepresentable {
         weak var scroll: CanvasScrollView?
         weak var document: ComparisonDocumentView?
         var identity: UUID?
+        var zoomRevision: UUID?
+        var zoomRequested = false
         var onToggleActualSize: (() -> Void)?
         var requestedActual = false
         var lastActual = false
@@ -122,7 +131,8 @@ struct NativeImageCanvas: NSViewRepresentable {
                 scroll.magnification = 1
                 lastActual = false
             }
-            if requestedActual != lastActual || (frameChanged && requestedActual) {
+            if zoomRequested || requestedActual != lastActual || (frameChanged && requestedActual && !scroll.userMagnified) {
+                zoomRequested = false
                 lastActual = requestedActual
                 let backing = scroll.window?.backingScaleFactor ?? 2
                 let desired = requestedActual
@@ -148,6 +158,7 @@ struct NativeImageCanvas: NSViewRepresentable {
 final class CanvasScrollView: NSScrollView {
     var onLayout: (() -> Void)?
     var onRequestDetail: (() -> Void)?
+    var userMagnified = false
 
     override func layout() {
         super.layout()
@@ -160,6 +171,11 @@ final class CanvasScrollView: NSScrollView {
         layer?.removeAllAnimations()
     }
 
+    override func reflectScrolledClipView(_ clipView: NSClipView) {
+        super.reflectScrolledClipView(clipView)
+        (documentView as? ComparisonDocumentView)?.updateViewportGeometry()
+    }
+
     override func scrollWheel(with event: NSEvent) {
         interruptAutomaticMotion()
         super.scrollWheel(with: event) // Keep AppKit's native momentum phases.
@@ -167,6 +183,7 @@ final class CanvasScrollView: NSScrollView {
 
     override func magnify(with event: NSEvent) {
         interruptAutomaticMotion()
+        userMagnified = true
         onRequestDetail?()
         // AppKit's document coordinate system keeps the touched image location
         // anchored, including when its centered clip bounds have negative origins.
@@ -279,6 +296,8 @@ final class ComparisonDocumentView: NSView {
         updateGeometry()
     }
 
+    func updateViewportGeometry() { updateGeometry() }
+
     private func updateGeometry() {
         guard installed else { return }
         CATransaction.begin()
@@ -296,7 +315,9 @@ final class ComparisonDocumentView: NSView {
         dividerLine.frame = CGRect(x: position - lineWidth / 2, y: 0,
                                    width: lineWidth, height: bounds.height)
         let radius = 13 / factor
-        grip.frame = CGRect(x: position - radius, y: bounds.midY - radius,
+        let visible = bounds.intersection(visibleRect)
+        let gripY = visible.isEmpty ? bounds.midY : visible.midY
+        grip.frame = CGRect(x: position - radius, y: gripY - radius,
                             width: radius * 2, height: radius * 2)
         grip.cornerRadius = radius
         gripMarks.frame = grip.bounds

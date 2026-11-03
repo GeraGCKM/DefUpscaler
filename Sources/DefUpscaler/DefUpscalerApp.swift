@@ -53,12 +53,10 @@ struct DefUpscalerApp: App {
                     .keyboardShortcut("s", modifiers: [.command, .shift])
                     .disabled(!model.hasResults || model.saving)
                 Button("Ajustar a ventana") {
-                    model.actualSize = false
-                    model.refreshPreview()
+                    model.setActualSize(false)
                 }.keyboardShortcut("0", modifiers: .command)
                 Button("Tamaño real") {
-                    model.actualSize = true
-                    model.refreshPreview()
+                    model.setActualSize(true)
                 }.keyboardShortcut("1", modifiers: .command).disabled(model.preview == nil)
                 Button("Mostrar u ocultar resultados") {
                     model.showingResult.toggle()
@@ -208,12 +206,12 @@ struct ContentView: View {
                     comparing: compare && canCompare,
                     identity: model.previewItemID,
                     actualSize: model.actualSize,
+                    zoomRevision: model.zoomRevision,
                     imagePixelWidth: model.metadata?.width ?? Int(preview.size.width),
                     reduceMotion: reduceMotion,
                     onRequestDetail: model.requestDetailedPreview,
                     onToggleActualSize: {
-                        model.actualSize.toggle()
-                        model.refreshPreview()
+                        model.setActualSize(!model.actualSize)
                     }
                 )
                 // Preserve the same native scroll view across selections: the
@@ -339,8 +337,7 @@ struct ContentView: View {
                 Button(showQueue ? "Ocultar cola" : "Mostrar cola") { showQueue.toggle() }
                 Button("Ajustar a ventana") { resetZoom() }
                 Button("Ver al 100 %") {
-                    model.actualSize = true
-                    model.refreshPreview()
+                    model.setActualSize(true)
                 }
                 Button("Reescalar de nuevo", action: model.reprocessSelected).disabled(model.running || model.selected == nil)
                 Button("Guardar todos…", action: model.saveAll).disabled(!model.hasResults || model.saving)
@@ -399,8 +396,7 @@ struct ContentView: View {
         }
     }
     private func resetZoom() {
-        model.actualSize = false
-        model.refreshPreview()
+        model.setActualSize(false)
     }
 }
 
