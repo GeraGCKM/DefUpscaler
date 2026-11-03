@@ -92,13 +92,10 @@ struct ContentView: View {
     @State private var targeted = false
     @State private var compare = true
     @State private var divider = 0.5
-    @State private var zoom: CGFloat = 1
-    @State private var gestureZoom: CGFloat = 1
-    @State private var showQueue = true
+     @State private var showQueue = true
     @State private var original: NSImage?
     @State private var compareToken = UUID()
     @State private var dividerDragStart: CGFloat?
-    @State private var canvasSize: CGSize = CGSize(width: 860, height: 600)
     private var movement: Animation? { reduceMotion ? nil : .smooth(duration: 0.24) }
     private var canCompare: Bool { model.selected?.result != nil && original != nil }
 
@@ -132,12 +129,6 @@ struct ContentView: View {
         .background(WindowAspectObserver(aspect: model.preview == nil ? nil : CGFloat(model.aspect)))
         .onChange(of: model.selectedID) { _, _ in loadComparison(); resetZoom() }
         .onChange(of: model.selected?.result) { _, _ in loadComparison() }
-        .onChange(of: model.previewRevision) { _, _ in
-            loadComparison()
-            if model.actualSize, let preview = model.preview {
-                zoom = actualZoom(preview: preview, size: canvasSize)
-            }
-        }
         .onAppear(perform: loadComparison)
         .onDrop(of: [.fileURL], isTargeted: $targeted) { providers in
             var accepted = false
@@ -154,125 +145,62 @@ struct ContentView: View {
     }
 
     private var workspace: some View {
-        GeometryReader { bounds in
-            let width = max(1, bounds.size.width)
-            let height = max(1, bounds.size.height)
-            ZStack {
-                Color(nsColor: .textBackgroundColor)
-                if let preview = model.preview {
-                    ScrollView([.horizontal, .vertical]) {
-                        GeometryReader { area in
-                            let fitted = fit(image: preview, in: CGSize(width: width, height: height))
-                            let displayed = CGSize(width: fitted.width * zoom * gestureZoom,
-                                                   height: fitted.height * zoom * gestureZoom)
-                            ZStack(alignment: .topLeading) {
-                                previewContent(preview, size: displayed)
-                                    .frame(width: displayed.width, height: displayed.height)
-                                    .id(model.previewRevision)
-                                    .transition(reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 0.99)))
-                            }
-                            .frame(width: max(area.size.width, displayed.width),
-                                   height: max(area.size.height, displayed.height))
-                        }
-                        .frame(width: max(width, fit(image: preview, in: bounds.size).width * zoom * gestureZoom),
-                               height: max(height, fit(image: preview, in: bounds.size).height * zoom * gestureZoom))
+        ZStack {
+            Color(nsColor: .textBackgroundColor)
+            if let preview = model.preview {
+                NativeImageCanvas(
+                    result: preview,
+                    original: original,
+                    comparing: compare && canCompare,
+                    identity: model.selectedID,
+                    actualSize: model.actualSize,
+                    imagePixelWidth: model.metadata?.width ?? Int(preview.size.width),
+                    reduceMotion: reduceMotion,
+                    onToggleActualSize: {
+                        model.actualSize.toggle()
+                        model.refreshPreview()
                     }
-                    .scrollIndicators(.hidden)
-                    .magnificationGestureCompat(zoom: $zoom, gestureZoom: $gestureZoom)
-                    .onTapGesture(count: 2) {
-                        if model.actualSize { resetZoom() }
-                        else { showActualSize(preview: preview) }
-                    }
-                    .accessibilityLabel("Vista previa ampliable")
-                    .accessibilityAction(named: "Ajustar a ventana") { resetZoom() }
-                    .accessibilityAction(named: "Tamaño real") {
-                        showActualSize(preview: preview)
-                    }
-                } else {
-                    VStack(spacing: 12) {
-                        Image(systemName: "photo.on.rectangle.angled")
-                            .font(.system(size: 38, weight: .ultraLight))
-                        Text("Suelta tus imágenes aquí").font(.title3.weight(.medium))
-                        Button("Elegir imágenes", action: model.choose)
-                    }
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 2, perform: model.choose)
+                )
+                .id(model.selectedID)
+                .accessibilityLabel("Imagen, desplaza con dos dedos o pellizca para ampliar")
+            } else {
+                VStack(spacing: 12) {
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.system(size: 38, weight: .ultraLight))
+                    Text("Suelta tus imágenes aquí").font(.title3.weight(.medium))
+                    Button("Elegir imágenes", action: model.choose)
                 }
-                if model.loading { ProgressView().controlSize(.small).padding(12).background(.regularMaterial, in: Capsule()) }
-                if targeted { RoundedRectangle(cornerRadius: 15).strokeBorder(.tint, lineWidth: 2).padding(6) }
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2, perform: model.choose)
             }
-            .onAppear { canvasSize = bounds.size }
-            .onChange(of: bounds.size) { _, value in canvasSize = value }
-            .overlay(alignment: .topLeading) {
-                if model.preview != nil {
-                    HStack(spacing: 8) {
-                        Text(model.dimensions).monospacedDigit()
-                        if zoom != 1 {
-                            Button("Ajustar") { resetZoom() }
-                                .buttonStyle(.plain).foregroundStyle(.primary)
-                        }
-                    }
-                    .font(.caption).foregroundStyle(.secondary)
-                    .padding(10).background(.regularMaterial, in: Capsule()).padding(16)
-                }
+            if model.loading {
+                ProgressView().controlSize(.small).padding(12)
+                    .background(.regularMaterial, in: Capsule())
+                    .allowsHitTesting(false)
+            }
+            if targeted {
+                RoundedRectangle(cornerRadius: 15)
+                    .strokeBorder(.tint, lineWidth: 2).padding(6)
+                    .allowsHitTesting(false)
             }
         }
-    }
-
-    private func previewContent(_ image: NSImage, size: CGSize) -> some View {
-        ZStack(alignment: .topLeading) {
-            Image(nsImage: image).resizable().interpolation(.high)
-                .frame(width: size.width, height: size.height)
-                .allowsHitTesting(false)
-            if compare, canCompare, let original {
-                Image(nsImage: original).resizable().interpolation(.high)
-                    .frame(width: size.width, height: size.height)
-                    .mask(alignment: .leading) {
-                        Rectangle().frame(width: size.width * divider)
+        .overlay(alignment: .topLeading) {
+            if model.preview != nil {
+                HStack(spacing: 8) {
+                    Text(model.dimensions).monospacedDigit()
+                    if model.actualSize {
+                        Button("Ajustar", action: resetZoom)
+                            .buttonStyle(.plain).foregroundStyle(.primary)
                     }
-                    .allowsHitTesting(false)
-                // Full-surface clicks ease rapidly to the cursor; the independent
-                // 32-point handle cancels that animation on the first drag update.
-                Color.clear.contentShape(Rectangle())
-                    .frame(width: size.width, height: size.height)
-                    .onTapGesture { location in
-                        if dividerDragStart == nil {
-                            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.13)) {
-                                divider = min(1, max(0, location.x / max(1, size.width)))
-                            }
-                        }
-                    }
-                Rectangle().fill(.white.opacity(0.9)).frame(width: 1.8, height: size.height)
-                    .shadow(color: .black.opacity(0.3), radius: 2)
-                    .position(x: size.width * divider, y: size.height / 2)
-                    .allowsHitTesting(false)
-                Circle().fill(.regularMaterial)
-                    .overlay(Image(systemName: "arrow.left.and.right").font(.system(size: 10, weight: .semibold)))
-                    .frame(width: 30, height: 30)
-                    .position(x: size.width * divider, y: size.height / 2)
-                    .allowsHitTesting(false)
-                Color.clear.contentShape(Rectangle())
-                    .frame(width: 32, height: size.height)
-                    .position(x: size.width * divider, y: size.height / 2)
-                    .gesture(DragGesture(minimumDistance: 0)
-                        .onChanged { value in
-                            if dividerDragStart == nil { dividerDragStart = divider }
-                            var transaction = Transaction()
-                            transaction.disablesAnimations = true
-                            withTransaction(transaction) {
-                                divider = min(1, max(0,
-                                    (dividerDragStart ?? divider) + value.translation.width / max(1, size.width)))
-                            }
-                        }
-                        .onEnded { _ in dividerDragStart = nil })
-                    .accessibilityLabel("Divisor de comparación")
-                    .accessibilityHint("Arrastra para comparar las dos versiones")
+                }
+                .font(.caption).foregroundStyle(.secondary)
+                .padding(10)
+                .background(.regularMaterial, in: Capsule())
+                .padding(16)
             }
         }
-        .frame(width: size.width, height: size.height)
-        .clipped()
     }
 
     @ViewBuilder private var controls: some View {
@@ -310,9 +238,8 @@ struct ContentView: View {
                 Button(showQueue ? "Ocultar cola" : "Mostrar cola") { showQueue.toggle() }
                 Button("Ajustar a ventana") { resetZoom() }
                 Button("Ver al 100 %") {
-                    if let preview = model.preview {
-                        showActualSize(preview: preview)
-                    }
+                    model.actualSize = true
+                    model.refreshPreview()
                 }
                 Button("Reescalar de nuevo", action: model.reprocessSelected).disabled(model.running || model.selected == nil)
                 Button("Guardar todos…", action: model.saveAll).disabled(!model.hasResults || model.saving)
@@ -388,42 +315,8 @@ struct ContentView: View {
         }
     }
     private func resetZoom() {
-        zoom = 1; gestureZoom = 1; model.actualSize = false
+        model.actualSize = false
         model.refreshPreview()
-    }
-
-    private func showActualSize(preview: NSImage) {
-        model.actualSize = true
-        zoom = actualZoom(preview: preview, size: canvasSize)
-        model.refreshPreview()
-    }
-    private func fit(image: NSImage, in bounds: CGSize) -> CGSize {
-        let w = max(1, image.size.width), h = max(1, image.size.height)
-        let scale = min(bounds.width / w, bounds.height / h)
-        return CGSize(width: w * scale, height: h * scale)
-    }
-    private func actualZoom(preview: NSImage, size: CGSize) -> CGFloat {
-        let fitted = fit(image: preview, in: size)
-        let scale = NSScreen.main?.backingScaleFactor ?? 2
-        let actualWidth = CGFloat(model.metadata?.width ?? Int(preview.size.width))
-        return max(1, (actualWidth / scale) / max(1, fitted.width))
-    }
-}
-
-private struct MagnifyCompat: ViewModifier {
-    @Binding var zoom: CGFloat
-    @Binding var gestureZoom: CGFloat
-    func body(content: Content) -> some View {
-        content.gesture(MagnificationGesture().onChanged { gestureZoom = $0 }
-            .onEnded { value in
-                zoom = min(16, max(0.5, zoom * value))
-                gestureZoom = 1
-            })
-    }
-}
-private extension View {
-    func magnificationGestureCompat(zoom: Binding<CGFloat>, gestureZoom: Binding<CGFloat>) -> some View {
-        modifier(MagnifyCompat(zoom: zoom, gestureZoom: gestureZoom))
     }
 }
 
