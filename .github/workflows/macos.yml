@@ -52,6 +52,13 @@ jobs:
           if [[ -d build/models/WebPhoto4x.mlmodelc ]]; then
             DEFUPSCALER_WEBPHOTO_MODEL="$PWD/build/models/WebPhoto4x.mlmodelc" swift test --filter testWebPhotoFourTimes
           fi
+      - name: Compare restoration models on a deterministic reference
+        continue-on-error: true
+        run: |
+          if [[ -d build/models/WebPhoto4x.mlmodelc ]]; then
+            DEFUPSCALER_PHOTO_MODEL="$PWD/build/models/Photo4x.mlmodelc" DEFUPSCALER_PHOTO2_MODEL="$PWD/build/models/Photo2x.mlmodelc" DEFUPSCALER_WEBPHOTO_MODEL="$PWD/build/models/WebPhoto4x.mlmodelc" swift test --filter testSyntheticModelComparison
+            python scripts/report_quality.py build/quality
+          fi
       - name: Package application
         run: bash scripts/package.sh
       - name: Validate bundled model resources
@@ -71,6 +78,7 @@ jobs:
             build/SHA256SUMS.txt
             build/models/model-provenance.json
             build/screenshots/
+            build/quality/
           if-no-files-found: error
           retention-days: 14
       - name: Diagnose native crashes

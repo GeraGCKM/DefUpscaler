@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import ImageIO
+import CoreImage
 import UniformTypeIdentifiers
 import UpscaleCore
 import OSLog
@@ -17,9 +18,11 @@ struct QueueItem: Identifiable {
 struct LoadedPreview: @unchecked Sendable {
     let image: CGImage
     let metadata: ImageMetadata
+    let averageColor: (Double, Double, Double)
 }
 
 actor PreviewLoader {
+    private let colorContext = CIContext(options: [.cacheIntermediates: false])
     func load(_ url: URL, full: Bool) throws -> LoadedPreview {
         try Task.checkCancellation()
         let access = url.startAccessingSecurityScopedResource()
@@ -34,7 +37,21 @@ actor PreviewLoader {
                 kCGImageSourceThumbnailMaxPixelSize: full ? max(metadata.width, metadata.height) : 1400
               ] as CFDictionary) else { throw UpscaleError.invalidImage }
         try Task.checkCancellation()
-        return LoadedPreview(image: cg, metadata: metadata)
+        let average = CIImage(cgImage: cg).applyingFilter("CIAreaAverage", parameters: [
+            kCIInputExtentKey: CIVector(cgRect: CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
+        ])
+        var pixel = [UInt8](repeating: 0, count: 4)
+        pixel.withUnsafeMutableBytes { raw in
+            guard let pointer = raw.baseAddress else { return }
+            colorContext.render(average, toBitmap: pointer, rowBytes: 4,
+                                bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                                format: .RGBA8,
+                                colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!)
+        }
+        return LoadedPreview(image: cg, metadata: metadata,
+                             averageColor: (Double(pixel[0]) / 255,
+                                            Double(pixel[1]) / 255,
+                                            Double(pixel[2]) / 255))
     }
 }
 
@@ -43,6 +60,7 @@ final class AppModel: ObservableObject {
     @Published var items: [QueueItem] = []
     @Published var selectedID: UUID?
     @Published var preview: NSImage?
+    @Published var ambiance: Color = Color.gray
     @Published var previewItemID: UUID?
     @Published var metadata: ImageMetadata?
     @Published var previewRevision = UUID()
@@ -120,6 +138,8 @@ final class AppModel: ObservableObject {
                 guard generation == token, !Task.isCancelled else { return }
                 // Keep the old image visible until its replacement is decoded.
                 preview = NSImage(cgImage: loaded.image, size: .zero)
+                ambiance = Color(red: loaded.averageColor.0, green: loaded.averageColor.1,
+                                 blue: loaded.averageColor.2)
                 previewItemID = selected.id
                 metadata = loaded.metadata
                 previewRevision = UUID()

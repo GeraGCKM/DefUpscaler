@@ -18,8 +18,7 @@ struct NativeImageCanvas: NSViewRepresentable {
 
     func makeNSView(context: Context) -> CanvasScrollView {
         let scroll = CanvasScrollView(frame: .zero)
-        scroll.drawsBackground = true
-        scroll.backgroundColor = .textBackgroundColor
+        scroll.drawsBackground = false
         scroll.hasHorizontalScroller = false
         scroll.hasVerticalScroller = false
         scroll.horizontalScrollElasticity = .automatic
@@ -28,6 +27,7 @@ struct NativeImageCanvas: NSViewRepresentable {
         scroll.minMagnification = 0.5
         scroll.maxMagnification = 32
         scroll.contentView = CenteringCanvasClipView()
+        scroll.contentView.drawsBackground = false
         let document = ComparisonDocumentView(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
         document.onDoubleClick = { [weak coordinator = context.coordinator] in
             coordinator?.onToggleActualSize?()
@@ -45,18 +45,25 @@ struct NativeImageCanvas: NSViewRepresentable {
         coordinator.onToggleActualSize = onToggleActualSize
         coordinator.reduceMotion = reduceMotion
         coordinator.actualPixels = max(1, imagePixelWidth)
-        if coordinator.document?.result !== result, !reduceMotion, coordinator.document?.result != nil {
-            let transition = CATransition()
-            transition.type = .fade
-            transition.duration = 0.18
-            transition.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            coordinator.document?.layer?.add(transition, forKey: "preview-transition")
+        if let document = coordinator.document {
+            let shouldCompare = comparing && original != nil
+            let imageChanged = document.result !== result
+            let originalChanged = document.original !== original
+            if imageChanged || originalChanged || document.comparing != shouldCompare {
+                if imageChanged, !reduceMotion, document.result != nil {
+                    let transition = CATransition()
+                    transition.type = .fade
+                    transition.duration = 0.18
+                    transition.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                    document.layer?.add(transition, forKey: "preview-transition")
+                }
+                document.result = result
+                document.original = original
+                document.comparing = shouldCompare
+                document.needsDisplay = true
+            }
+            document.reducedMotion = reduceMotion
         }
-        coordinator.document?.result = result
-        coordinator.document?.original = original
-        coordinator.document?.reducedMotion = reduceMotion
-        coordinator.document?.comparing = comparing && original != nil
-        coordinator.document?.setNeedsDisplay(coordinator.document?.bounds ?? .zero)
         if coordinator.identity != identity {
             coordinator.identity = identity
             coordinator.lastActual = false
@@ -157,7 +164,8 @@ final class ComparisonDocumentView: NSView {
     }
 
     override var isFlipped: Bool { true }
-    override var isOpaque: Bool { true }
+    override var isOpaque: Bool { false }
+    override var acceptsFirstResponder: Bool { true }
 
     override class func defaultAnimation(forKey key: NSAnimatablePropertyKey) -> Any? {
         if key == "divider" { return CABasicAnimation() }
@@ -166,8 +174,6 @@ final class ComparisonDocumentView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        NSColor.textBackgroundColor.setFill()
-        NSBezierPath(rect: bounds).fill()
         guard let result else { return }
         NSGraphicsContext.current?.imageInterpolation = .high
         result.draw(in: bounds, from: .zero, operation: .sourceOver, fraction: 1)
@@ -200,6 +206,7 @@ final class ComparisonDocumentView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         guard result != nil else { return }
+        window?.makeFirstResponder(self)
         if event.clickCount == 2 {
             onDoubleClick?()
             return
@@ -236,7 +243,18 @@ final class ComparisonDocumentView: NSView {
         draggingDivider = false
     }
 
+    override func keyDown(with event: NSEvent) {
+        guard comparing else { super.keyDown(with: event); return }
+        let step: CGFloat = event.modifierFlags.contains(.shift) ? 0.1 : 0.025
+        switch event.keyCode {
+        case 123: divider = max(0, divider - step)
+        case 124: divider = min(1, divider + step)
+        default: super.keyDown(with: event)
+        }
+    }
+
     override func cursorUpdate(with event: NSEvent) {
-        NSCursor.resizeLeftRight.set()
+        if comparing { NSCursor.resizeLeftRight.set() }
+        else { NSCursor.arrow.set() }
     }
 }

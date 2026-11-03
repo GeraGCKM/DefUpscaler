@@ -102,6 +102,7 @@ struct PrimaryAction: ViewModifier {
 
 struct ContentView: View {
     @ObservedObject var model: AppModel
+    @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var targeted = false
@@ -165,6 +166,15 @@ struct ContentView: View {
     private var workspace: some View {
         ZStack {
             Color(nsColor: .textBackgroundColor)
+            if model.preview != nil && !reduceTransparency {
+                RadialGradient(colors: [
+                    model.ambiance.opacity(scheme == .dark ? 0.4 : 0.22),
+                    model.ambiance.opacity(scheme == .dark ? 0.1 : 0.06),
+                    .clear
+                ], center: .center, startRadius: 0, endRadius: 620)
+                .animation(movement, value: model.previewRevision)
+                .allowsHitTesting(false)
+            }
             if let preview = model.preview {
                 NativeImageCanvas(
                     result: preview,
