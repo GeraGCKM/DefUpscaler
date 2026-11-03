@@ -22,7 +22,7 @@ struct LoadedPreview: @unchecked Sendable {
     let averageColor: (Double, Double, Double)
     let secondaryColor: (Double, Double, Double)
     let tertiaryColor: (Double, Double, Double)
-
+}
 
 actor PreviewLoader {
     private let colorContext = CIContext(options: [.cacheIntermediates: false])
