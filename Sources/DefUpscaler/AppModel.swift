@@ -90,6 +90,7 @@ final class AppModel: ObservableObject {
     @Published var message: String?
     @Published var showingResult = true
     @Published var actualSize = false
+    @Published private(set) var detailedPreview = false
     private var task: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
     private var generation = UUID()
@@ -138,14 +139,19 @@ final class AppModel: ObservableObject {
         items.append(contentsOf: valid.map { QueueItem(input: $0) })
         select(items.last!.id)
     }
-    func select(_ id: UUID) { selectedID = id; showingResult = true; refreshPreview() }
+    func select(_ id: UUID) { detailedPreview = false; actualSize = false; selectedID = id; showingResult = true; refreshPreview() }
+    func requestDetailedPreview() {
+        guard !detailedPreview else { return }
+        detailedPreview = true
+        refreshPreview()
+    }
     func refreshPreview() {
         guard let selected else { return }
         previewTask?.cancel()
         let token = UUID()
         generation = token
         let url = showingResult ? selected.result ?? selected.input : selected.input
-        let full = actualSize
+        let full = actualSize || detailedPreview
         loading = true
         message = nil
         previewTask = Task {

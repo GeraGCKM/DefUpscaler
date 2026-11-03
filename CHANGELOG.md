@@ -1,3 +1,11 @@
+# 0.3 provisional — delivery polish
+
+- Stable native glass identities transform the action surface into progress and back into save; controls sit outside the inspection viewport.
+- Spring-driven queue selection, collapsing queue, drop feedback and cancellable native divider travel. Direct manipulation takes over from presentation geometry.
+- Explicit cursor-centered pinch, native momentum, animated fit/100% and high-resolution preview promotion on the first pinch.
+- Ordered multi-image drops, latest-selection guards, visible recoverable messages and Reduce Motion window transitions.
+- Existing models, precision, alpha, PNG/JPEG exports and adaptive inference are preserved.
+
 # 0.3 provisional — native UX refinement
 
 - Replaced the monolithic queue expression with reusable async thumbnail cells and restrained hover/selection motion.

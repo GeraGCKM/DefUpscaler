@@ -12,6 +12,7 @@ struct NativeImageCanvas: NSViewRepresentable {
     let actualSize: Bool
     let imagePixelWidth: Int
     let reduceMotion: Bool
+    let onRequestDetail: () -> Void
     let onToggleActualSize: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -42,6 +43,7 @@ struct NativeImageCanvas: NSViewRepresentable {
 
     func updateNSView(_ scroll: CanvasScrollView, context: Context) {
         let coordinator = context.coordinator
+        scroll.onRequestDetail = onRequestDetail
         coordinator.onToggleActualSize = onToggleActualSize
         coordinator.reduceMotion = reduceMotion
         coordinator.actualPixels = max(1, imagePixelWidth)
@@ -56,7 +58,10 @@ struct NativeImageCanvas: NSViewRepresentable {
                     transition.duration = 0.18
                     transition.timingFunction = CAMediaTimingFunction(name: .easeOut)
                     document.layer?.add(transition, forKey: "preview-transition")
-                    let settle = CABasicAnimation(keyPath: "transform.scale")
+                    let settle = CASpringAnimation(keyPath: "transform.scale")
+                    settle.mass = 1
+                    settle.stiffness = 260
+                    settle.damping = 32
                     settle.fromValue = 0.989
                     settle.toValue = 1.0
                     settle.duration = 0.25
@@ -125,7 +130,15 @@ struct NativeImageCanvas: NSViewRepresentable {
                     : 1
                 let target = min(scroll.maxMagnification, max(scroll.minMagnification, desired))
                 let center = NSPoint(x: document.bounds.midX, y: document.bounds.midY)
-                scroll.setMagnification(target, centeredAt: center)
+                if reduceMotion || resetOnNextLayout || frameChanged {
+                    scroll.setMagnification(target, centeredAt: center)
+                } else {
+                    NSAnimationContext.runAnimationGroup { context in
+                        context.duration = 0.24
+                        context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.8, 0.2, 1)
+                        scroll.animator().setMagnification(target, centeredAt: center)
+                    }
+                }
             }
             document.zoom = scroll.magnification
         }
@@ -134,14 +147,33 @@ struct NativeImageCanvas: NSViewRepresentable {
 
 final class CanvasScrollView: NSScrollView {
     var onLayout: (() -> Void)?
+    var onRequestDetail: (() -> Void)?
 
     override func layout() {
         super.layout()
         onLayout?()
     }
 
+    private func interruptAutomaticMotion() {
+        (documentView as? ComparisonDocumentView)?.interruptMotion()
+        contentView.layer?.removeAllAnimations()
+        layer?.removeAllAnimations()
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        interruptAutomaticMotion()
+        super.scrollWheel(with: event) // Keep AppKit's native momentum phases.
+    }
+
     override func magnify(with event: NSEvent) {
-        super.magnify(with: event)
+        interruptAutomaticMotion()
+        onRequestDetail?()
+        // AppKit's document coordinate system keeps the touched image location
+        // anchored, including when its centered clip bounds have negative origins.
+        let anchor = documentView?.convert(event.locationInWindow, from: nil) ?? .zero
+        let target = min(maxMagnification, max(minMagnification,
+                                              magnification * (1 + event.magnification)))
+        setMagnification(target, centeredAt: anchor)
         // The comparison grip and line stay a fixed on-screen size even while
         // the user is actively pinching, rather than after SwiftUI updates.
         (documentView as? ComparisonDocumentView)?.zoom = magnification
@@ -186,18 +218,13 @@ final class ComparisonDocumentView: NSView {
     private let grip = CALayer()
     private let gripMarks = CAShapeLayer()
 
-    @objc dynamic var divider: CGFloat = 0.5 {
+    var divider: CGFloat = 0.5 {
         didSet { updateGeometry() }
     }
 
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
     override var acceptsFirstResponder: Bool { true }
-
-    override class func defaultAnimation(forKey key: NSAnimatablePropertyKey) -> Any? {
-        if key == "divider" { return CABasicAnimation() }
-        return super.defaultAnimation(forKey: key)
-    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -298,38 +325,62 @@ final class ComparisonDocumentView: NSView {
         cursorArea = area
     }
 
+    /// Capture presentation geometry before removing animations: a new gesture
+    /// always takes over from the currently visible divider, never its old target.
+    func interruptMotion() {
+        let visibleX = dividerLine.presentation()?.position.x
+        let wasMoving = dividerLine.animation(forKey: "divider-travel") != nil
+        originalClip.removeAllAnimations()
+        dividerLine.removeAllAnimations()
+        grip.removeAllAnimations()
+        layer?.removeAnimation(forKey: "preview-transition")
+        layer?.removeAnimation(forKey: "preview-settle")
+        if wasMoving, let visibleX { divider = min(1, max(0, visibleX / max(1, bounds.width))) }
+    }
+
+    private func moveDivider(to destination: CGFloat, animated: Bool) {
+        interruptMotion()
+        let oldPath = originalClip.path
+        let oldLine = dividerLine.position
+        let oldGrip = grip.position
+        divider = min(1, max(0, destination))
+        guard animated, !reducedMotion else { return }
+        // One CA transaction, identical timing: mask and grip cannot drift apart.
+        func travel(_ layer: CALayer, key: String, from: Any?, to: Any?) {
+            let animation = CABasicAnimation(keyPath: key)
+            animation.fromValue = from
+            animation.toValue = to
+            animation.duration = 0.16
+            animation.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 0.8, 0.25, 1)
+            layer.add(animation, forKey: "divider-travel")
+        }
+        travel(originalClip, key: "path", from: oldPath, to: originalClip.path)
+        travel(dividerLine, key: "position", from: NSValue(point: oldLine), to: NSValue(point: dividerLine.position))
+        travel(grip, key: "position", from: NSValue(point: oldGrip), to: NSValue(point: grip.position))
+    }
+
     override func mouseDown(with event: NSEvent) {
         guard result != nil else { return }
         window?.makeFirstResponder(self)
+        interruptMotion()
         if event.clickCount == 2 {
+            draggingDivider = false
             onDoubleClick?()
             return
         }
         guard comparing, original != nil else { return }
         let point = convert(event.locationInWindow, from: nil)
-        let distance = abs(point.x - bounds.width * divider)
-        if distance <= 18 / max(0.5, zoom) {
-            draggingDivider = true
-        } else {
-            let destination = min(1, max(0, point.x / max(1, bounds.width)))
-            if reducedMotion {
-                divider = destination
-            } else {
-                NSAnimationContext.runAnimationGroup { context in
-                    context.duration = 0.13
-                    context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                    animator().divider = destination
-                }
-            }
+        let nearDivider = abs(point.x - bounds.width * divider) <= 18 / max(0.5, zoom)
+        draggingDivider = true
+        if !nearDivider {
+            moveDivider(to: point.x / max(1, bounds.width), animated: true)
         }
     }
 
     override func mouseDragged(with event: NSEvent) {
         guard draggingDivider else { return }
         let point = convert(event.locationInWindow, from: nil)
-        // Pointer motion always wins over an interrupted click-to-move animation.
-        layer?.removeAllAnimations()
-        divider = min(1, max(0, point.x / max(1, bounds.width)))
+        moveDivider(to: point.x / max(1, bounds.width), animated: false)
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -340,8 +391,8 @@ final class ComparisonDocumentView: NSView {
         guard comparing else { super.keyDown(with: event); return }
         let step: CGFloat = event.modifierFlags.contains(.shift) ? 0.1 : 0.025
         switch event.keyCode {
-        case 123: divider = max(0, divider - step)
-        case 124: divider = min(1, divider + step)
+        case 123: moveDivider(to: divider - step, animated: true)
+        case 124: moveDivider(to: divider + step, animated: true)
         default: super.keyDown(with: event)
         }
     }

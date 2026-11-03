@@ -113,10 +113,10 @@ struct ContentView: View {
     @Namespace private var glassNamespace
     @State private var targeted = false
     @State private var compare = true
-     @State private var showQueue = true
+    @State private var showQueue = true
     @State private var original: NSImage?
     @State private var compareToken = UUID()
-    private var movement: Animation? { reduceMotion ? nil : .smooth(duration: 0.24) }
+    private var movement: Animation? { reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.88) }
     private var canCompare: Bool {
         model.selected?.result != nil && original != nil &&
         model.previewItemID == model.selectedID && model.showingResult
@@ -124,35 +124,58 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ZStack(alignment: .bottom) {
-                workspace
-                VStack(spacing: 12) {
-                    Spacer()
-                    controls
-                }
-                .padding(16)
+            workspace
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+            // The control shelf has its own space: glass never covers inspected pixels.
+            controls.padding(.horizontal, 16).padding(.vertical, 10)
+            if let message = model.message {
+                HStack(alignment: .top, spacing: 8) {
+                    Text(message).font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button { model.message = nil } label: { Image(systemName: "xmark") }
+                        .buttonStyle(.plain).accessibilityLabel("Cerrar mensaje")
+                }.padding(.horizontal, 22).padding(.bottom, 8)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if showQueue && !model.items.isEmpty { queue }
+            if showQueue && !model.items.isEmpty {
+                queue.transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+            }
         }
         .frame(minWidth: 540, minHeight: 420)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .background(WindowAspectObserver(aspect: model.preview == nil ? nil : CGFloat(model.aspect)))
-        .onChange(of: model.selectedID) { _, _ in loadComparison(); resetZoom() }
+        .background {
+            if reduceTransparency { Color(nsColor: .windowBackgroundColor) }
+            else { WindowMaterial().overlay(model.ambiance.opacity(scheme == .dark ? 0.13 : 0.06)) }
+        }
+        .background(WindowAspectObserver(aspect: model.preview == nil ? nil : CGFloat(model.aspect), reduceMotion: reduceMotion))
+        .onChange(of: model.selectedID) { _, _ in loadComparison() }
+        .onChange(of: model.detailedPreview) { _, _ in loadComparison() }
+        .onChange(of: model.actualSize) { _, _ in loadComparison() }
         .onChange(of: model.selected?.result) { _, _ in loadComparison() }
         .onAppear(perform: loadComparison)
         .onDrop(of: [.fileURL], isTargeted: $targeted) { providers in
-            var accepted = false
-            for provider in providers where provider.hasItemConformingToTypeIdentifier("public.file-url") {
-                accepted = true
-                _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                    if let url { Task { @MainActor in model.add([url]) } }
+            let files = providers.filter { $0.hasItemConformingToTypeIdentifier("public.file-url") }
+            Task { @MainActor in
+                var urls: [URL] = []
+                // Preserve drop order and select the last image only once.
+                for provider in files {
+                    let url: URL? = await withCheckedContinuation { continuation in
+                        _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                            continuation.resume(returning: url)
+                        }
+                    }
+                    if let url { urls.append(url) }
                 }
+                model.add(urls)
             }
-            return accepted
+            return !files.isEmpty
         }
         .animation(movement, value: showQueue)
-        .animation(movement, value: model.selectedID)
+        .animation(movement, value: model.previewItemID)
+        .animation(movement, value: targeted)
+        .animation(movement, value: canCompare)
+        .animation(movement, value: model.message)
+        .animation(movement, value: model.items.isEmpty)
     }
 
     private var workspace: some View {
@@ -183,10 +206,11 @@ struct ContentView: View {
                     result: preview,
                     original: original,
                     comparing: compare && canCompare,
-                    identity: model.selectedID,
+                    identity: model.previewItemID,
                     actualSize: model.actualSize,
                     imagePixelWidth: model.metadata?.width ?? Int(preview.size.width),
                     reduceMotion: reduceMotion,
+                    onRequestDetail: model.requestDetailedPreview,
                     onToggleActualSize: {
                         model.actualSize.toggle()
                         model.refreshPreview()
@@ -216,23 +240,10 @@ struct ContentView: View {
                 RoundedRectangle(cornerRadius: 15)
                     .strokeBorder(.tint, lineWidth: 2).padding(6)
                     .allowsHitTesting(false)
+                    .transition(.scale(scale: 0.98).combined(with: .opacity))
             }
         }
-        .overlay(alignment: .topLeading) {
-            if model.preview != nil {
-                HStack(spacing: 8) {
-                    Text(model.dimensions).monospacedDigit()
-                    if model.actualSize {
-                        Button("Ajustar", action: resetZoom)
-                            .buttonStyle(.plain).foregroundStyle(.primary)
-                    }
-                }
-                .font(.caption).foregroundStyle(.secondary)
-                .padding(10)
-                .background(.regularMaterial, in: Capsule())
-                .padding(16)
-            }
-        }
+        .help(model.dimensions)
     }
 
     private var progressRow: some View {
@@ -256,44 +267,54 @@ struct ContentView: View {
 
     @ViewBuilder private var controls: some View {
         if #available(macOS 26, *), !reduceTransparency {
-            GlassEffectContainer(spacing: 16) {
-                VStack(spacing: 10) {
-                    if model.running {
-                        progressRow
-                            .padding(12)
-                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16))
-                            .glassEffectID("upscaling-progress", in: glassNamespace)
-                            .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
-                    }
+            GlassEffectContainer(spacing: 18) {
+                HStack(spacing: 12) {
                     actionRow
                         .padding(10)
-                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20))
-                        .glassEffectID("upscaling-actions", in: glassNamespace)
+                        .glassEffect(.regular.interactive(), in: Capsule())
+                        .glassEffectID("options", in: glassNamespace)
+                    actionSurface
+                        .padding(10)
+                        .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 23))
+                        // Stable identity makes action → progress → save one surface.
+                        .glassEffectID("operation", in: glassNamespace)
+                        .glassEffectTransition(.matchedGeometry)
                 }
             }
             .animation(movement, value: model.running)
+            .animation(movement, value: model.hasPending)
+            .animation(movement, value: model.selected?.result)
         } else {
-            VStack(spacing: 10) {
-                if model.running {
-                    progressRow
-                        .padding(12)
-                        .background(
-                            reduceTransparency ? Color(nsColor: .windowBackgroundColor)
-                                               : Color(nsColor: .controlBackgroundColor),
-                            in: RoundedRectangle(cornerRadius: 16)
-                        )
-                        .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
-                }
-                actionRow
-                    .padding(10)
-                    .background(
-                        reduceTransparency ? Color(nsColor: .windowBackgroundColor)
-                                           : Color(nsColor: .controlBackgroundColor),
-                        in: RoundedRectangle(cornerRadius: 18)
-                    )
+            HStack(spacing: 12) {
+                actionRow.padding(10)
+                actionSurface.padding(10)
             }
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 23))
             .animation(movement, value: model.running)
         }
+    }
+
+    private var actionSurface: some View {
+        HStack(spacing: 10) {
+            if model.running {
+                progressRow.frame(minWidth: 80, maxWidth: 220)
+                    .transition(.scale(scale: 0.94, anchor: .trailing).combined(with: .opacity))
+                Button(action: model.cancel) { Image(systemName: "stop.fill") }
+                    .buttonStyle(.plain).frame(width: 28, height: 28)
+                    .help("Cancelar").accessibilityLabel("Cancelar procesamiento")
+                    .keyboardShortcut(.cancelAction)
+            } else if model.hasPending {
+                Button(action: model.start) { Label("Reescalar", systemImage: "play.fill") }
+                    .modifier(PrimaryAction()).keyboardShortcut(.defaultAction)
+                    .disabled(model.saving || model.loading)
+            } else if model.selected?.result != nil {
+                Button(action: model.save) { Label("Guardar", systemImage: "square.and.arrow.down") }
+                    .modifier(PrimaryAction()).disabled(model.saving)
+            } else {
+                Button("Reescalar", action: model.start).disabled(true)
+            }
+        }
+        .fixedSize(horizontal: !model.running, vertical: false)
     }
 
     private var actionRow: some View {
@@ -328,60 +349,51 @@ struct ContentView: View {
                 Button("Limpiar sesión", action: model.reset).disabled(model.running || model.saving)
             } label: { Image(systemName: "ellipsis").frame(width: 24) }
                 .menuStyle(.borderlessButton).accessibilityLabel("Más acciones")
-            if model.running {
-                Button(action: model.cancel) {
-                    Label("Cancelar", systemImage: "xmark")
-                }
-            } else if model.hasPending {
-                Button(action: model.start) {
-                    Label("Reescalar", systemImage: "play.fill")
-                }.modifier(PrimaryAction())
-                    .keyboardShortcut(.defaultAction).disabled(model.saving || model.loading)
-            } else if model.selected?.result != nil {
-                Button(action: model.save) {
-                    Label("Guardar", systemImage: "square.and.arrow.down")
-                }.modifier(PrimaryAction()).disabled(model.saving)
-            } else {
-                Button("Reescalar", action: model.start).disabled(true)
-            }
+
         }
         .controlSize(.regular)
     }
 
     private var queue: some View {
-        ScrollView(.horizontal) {
+        ScrollViewReader { proxy in
+          ScrollView(.horizontal) {
             LazyHStack(spacing: 8) {
                 ForEach(model.items) { item in
-                    QueueCell(item: item, selected: item.id == model.selectedID) {
-                        model.select(item.id)
-                    }
+                    QueueCell(item: item, selected: item.id == model.selectedID, selectionNamespace: glassNamespace) {
+                        withAnimation(movement) { model.select(item.id) }
+                    }.id(item.id)
                 }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
         }
-        .scrollIndicators(.hidden)
+          .scrollIndicators(.hidden)
+          .onChange(of: model.selectedID) { _, id in
+              if let id { withAnimation(movement) { proxy.scrollTo(id, anchor: .center) } }
+          }
+        }
         .frame(height: 85)
         .background(.bar)
         .accessibilityLabel("Cola de imágenes")
     }
 
     private func loadComparison() {
-        original = nil
-        guard let selected = model.selected, let url = selected.result else { return }
         let token = UUID()
         compareToken = token
+        original = nil
+        guard let selected = model.selected, let url = selected.result else { return }
+        let full = model.actualSize || model.detailedPreview
         Task.detached(priority: .userInitiated) {
             let source = CGImageSourceCreateWithURL(selected.input as CFURL, nil)
             let cg = source.flatMap {
                 CGImageSourceCreateThumbnailAtIndex($0, 0, [
                     kCGImageSourceCreateThumbnailFromImageAlways: true,
                     kCGImageSourceCreateThumbnailWithTransform: true,
-                    kCGImageSourceThumbnailMaxPixelSize: 1800
+                    kCGImageSourceThumbnailMaxPixelSize: full ? 32768 : 1800
                 ] as CFDictionary)
             }
             await MainActor.run {
-                guard compareToken == token, model.selected?.result == url else { return }
+                guard compareToken == token, model.selectedID == selected.id, model.selected?.result == url else { return }
                 original = cg.map { NSImage(cgImage: $0, size: .zero) }
             }
         }
@@ -395,6 +407,7 @@ struct ContentView: View {
 private struct QueueCell: View {
     let item: QueueItem
     let selected: Bool
+    let selectionNamespace: Namespace.ID
     let onSelect: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovered = false
@@ -423,8 +436,13 @@ private struct QueueCell: View {
                 .frame(width: 68)
             }
             .padding(5)
-            .background(selected ? Color.accentColor.opacity(0.09) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 13))
+            .background {
+                if selected {
+                    RoundedRectangle(cornerRadius: 13)
+                        .fill(Color.accentColor.opacity(0.12))
+                        .matchedGeometryEffect(id: "queue-selection", in: selectionNamespace)
+                }
+            }
             .scaleEffect(hovered ? 1.035 : 1)
             .contentShape(RoundedRectangle(cornerRadius: 13))
         }
@@ -459,6 +477,7 @@ private struct QueueThumbnail: View {
                     kCGImageSourceThumbnailMaxPixelSize: 160
                 ] as CFDictionary)
             }.value
+            guard !Task.isCancelled else { return }
             thumbnail = result.map { NSImage(cgImage: $0, size: .zero) }
         }
     }

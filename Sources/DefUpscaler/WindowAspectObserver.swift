@@ -1,10 +1,12 @@
 import AppKit
 import SwiftUI
+import QuartzCore
 
 /// Adapts only until the user starts manually resizing. Never repositions a
 /// fullscreen or zoomed window, nor places the window outside visible bounds.
 struct WindowAspectObserver: NSViewRepresentable {
     let aspect: CGFloat?
+    let reduceMotion: Bool
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -19,7 +21,7 @@ struct WindowAspectObserver: NSViewRepresentable {
 
     func updateNSView(_ nsView: WindowProbe, context: Context) {
         context.coordinator.attach(nsView.window)
-        context.coordinator.update(aspect: aspect)
+        context.coordinator.update(aspect: aspect, reduceMotion: reduceMotion)
     }
 
     final class WindowProbe: NSView {
@@ -54,7 +56,7 @@ struct WindowAspectObserver: NSViewRepresentable {
             lastAspect = nil
         }
 
-        func update(aspect: CGFloat?) {
+        func update(aspect: CGFloat?, reduceMotion: Bool) {
             guard let aspect, aspect.isFinite, aspect > 0,
                   let window, let screen = window.screen,
                   !userResized, !window.isZoomed,
@@ -73,7 +75,15 @@ struct WindowAspectObserver: NSViewRepresentable {
                                width: width, height: height)
             frame.origin.x = min(max(visible.minX, frame.origin.x), visible.maxX - width)
             frame.origin.y = min(max(visible.minY, frame.origin.y), visible.maxY - height)
-            window.setFrame(frame, display: true, animate: true)
+            if reduceMotion {
+                window.setFrame(frame, display: true)
+            } else {
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.28
+                    context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.8, 0.2, 1)
+                    window.animator().setFrame(frame, display: true)
+                }
+            }
         }
     }
 }

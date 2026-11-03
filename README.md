@@ -72,3 +72,9 @@ The selected bundled models live in the app bundle. Unsaved outputs are in the a
 - Manual window resizing takes precedence over automatic aspect fitting. Full-screen and zoomed windows are not repositioned.
 
 Real M5 performance, complex alpha halos, seam evaluation, image-specific faithfulness and VoiceOver behavior remain acceptance tasks, not assumed successes.
+
+### v0.3 interaction polish
+
+The delivery branch builds on both provisional PRs. Pinch promotes the preview to full resolution without changing your zoom; two-finger scrolling retains AppKit momentum. Double-click toggles fit/100%. Drag the comparison line directly, click elsewhere for a short interruptible move, or use arrow keys (Shift for larger steps). The compact queue scrolls horizontally and keeps the latest selection visible. Native glass controls occupy a separate shelf, preserving unobstructed image inspection. Progress transforms the action surface; preferences remain in ⌘,.
+
+Liquid Glass requires macOS 26; older systems and accessibility settings use a restrained fallback. Output remains SDR, and the app is ad-hoc signed rather than notarized. Physical trackpad feel and visual acceptance are left to the user's Mac.
