@@ -21,12 +21,16 @@ public actor UpscaleEngine {
     }
 
     public func process(url: URL, scale: Int, mode: ImageMode = .illustration,
+                        neuralWeight: Double = 1,
                         progress: @escaping @Sendable (Double) async -> Void,
                         status: @escaping @Sendable (String) async -> Void = { _ in }) async throws -> URL {
         guard !busy else { throw UpscaleError.busy }
         busy = true
         defer { busy = false; context.clearCaches() }
         try Task.checkCancellation()
+        guard neuralWeight.isFinite, neuralWeight > 0, neuralWeight <= 1 else {
+            throw UpscaleError.invalidPrediction
+        }
         criticalMemory = false
         memoryWarning = false
         let source = DispatchSource.makeMemoryPressureSource(eventMask: [.normal, .warning, .critical], queue: .global(qos: .utility))
@@ -72,6 +76,15 @@ public actor UpscaleEngine {
             "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0), "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: 1)
         ]).clampedToExtent()
         let alpha = image.transformed(by: .init(scaleX: CGFloat(scale), y: CGFloat(scale)))
+        // In Pro, the source image contributes 75% of the final RGB.
+        // The finite guard contains Lanczos ringing at image borders; alpha is
+        // always resampled separately, as in the standard pipeline.
+        let sourceReference: CIImage? = neuralWeight < 1
+            ? rgb.cropped(to: CGRect(x: -8, y: -8, width: plan.width + 16, height: plan.height + 16))
+                .applyingFilter("CILanczosScaleTransform", parameters: [
+                    kCIInputScaleKey: Double(scale), kCIInputAspectRatioKey: 1.0
+                ])
+            : nil
         var governor = ResourceGovernor()
         var y = 0
         var completedPixels = 0
@@ -147,7 +160,21 @@ public actor UpscaleEngine {
                         kCIInputScaleKey: Double(scale) / Double(nativeScale), kCIInputAspectRatioKey: 1.0
                     ])).transformed(by: .init(translationX: CGFloat((x - padding) * scale), y: CGFloat((y - padding) * scale)))
                     let rect = CGRect(x: x * scale, y: y * scale, width: width * scale, height: rowHeight * scale)
-                    let restored = resized.applyingFilter("CIBlendWithAlphaMask", parameters: [
+                    let neuralOrBlend: CIImage
+                    if let sourceReference {
+                        // Mask luminance (rather than mask alpha) controls the
+                        // blend: gray 0.25 means 25% neural and 75% original.
+                        let mask = CIImage(color: CIColor(
+                            red: neuralWeight, green: neuralWeight, blue: neuralWeight, alpha: 1
+                        )).cropped(to: rect)
+                        neuralOrBlend = resized.applyingFilter("CIBlendWithMask", parameters: [
+                            kCIInputBackgroundImageKey: sourceReference,
+                            kCIInputMaskImageKey: mask
+                        ])
+                    } else {
+                        neuralOrBlend = resized
+                    }
+                    let restored = neuralOrBlend.applyingFilter("CIBlendWithAlphaMask", parameters: [
                         kCIInputBackgroundImageKey: CIImage(color: .clear).cropped(to: rect),
                         kCIInputMaskImageKey: alpha
                     ])
@@ -184,7 +211,7 @@ public actor UpscaleEngine {
             guard CGImageDestinationFinalize(writer) else { throw UpscaleError.invalidImage }
             try Task.checkCancellation()
             await progress(1)
-            logger.info("Completed mode=\(mode.rawValue) nativeScale=\(nativeScale) scale=\(scale) seconds=\(Date().timeIntervalSince(started))")
+            logger.info("Completed mode=\(mode.rawValue) neuralWeight=\(neuralWeight) nativeScale=\(nativeScale) scale=\(scale) seconds=\(Date().timeIntervalSince(started))")
             return destination
         } catch {
             try? FileManager.default.removeItem(at: destination)
