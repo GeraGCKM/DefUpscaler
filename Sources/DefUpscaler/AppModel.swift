@@ -13,6 +13,7 @@ struct QueueItem: Identifiable {
     var saved = false
     var state = "Pendiente"
     var outputScale: Int?
+    var proFidelity = false
 }
 
 struct LoadedPreview: @unchecked Sendable {
@@ -66,6 +67,7 @@ final class AppModel: ObservableObject {
     @Published var previewRevision = UUID()
     @Published var scale = 4
     @Published var mode: ImageMode = .illustration
+    @Published var proFidelity = false
     @Published var running = false
     @Published var loading = false
     @Published var saving = false
@@ -159,7 +161,10 @@ final class AppModel: ObservableObject {
     func start() {
         guard !running, hasPending else { return }
         let jobScale = scale
-        let jobMode = mode
+        let quality = QualityPlanner.make(
+            mode: mode, scale: scale, pro: proFidelity,
+            hasWebPhoto: Bundle.main.url(forResource: "WebPhoto4x", withExtension: "mlmodelc") != nil
+        )
         running = true
         message = nil
         task = Task(priority: .utility) {
@@ -171,13 +176,16 @@ final class AppModel: ObservableObject {
                 items[index].state = "En proceso"
                 progress = 0
                 do {
-                    let output = try await engine.process(url: input, scale: jobScale, mode: jobMode,
+                    let output = try await engine.process(
+                        url: input, scale: jobScale, mode: quality.mode,
+                        neuralWeight: quality.neuralWeight,
                         progress: { [weak self] value in await self?.setProgress(value) },
                         status: { [weak self] value in await self?.setPhase(value) })
                     if Task.isCancelled { try? FileManager.default.removeItem(at: output); throw CancellationError() }
                     if let i = items.firstIndex(where: { $0.id == id }) {
                         items[i].result = output
                         items[i].outputScale = jobScale
+                        items[i].proFidelity = quality.isPro
                         items[i].state = "Listo"
                     }
                     if selectedID == id { showingResult = true; refreshPreview() }
