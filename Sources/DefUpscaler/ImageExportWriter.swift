@@ -9,8 +9,18 @@ enum ImageExportWriter {
     static func write(from source: URL, to destination: URL) throws {
         switch destination.pathExtension.lowercased() {
         case "png":
-            let data = try Data(contentsOf: source, options: .mappedIfSafe)
-            try data.write(to: destination, options: .atomic)
+            // FileManager can stream/clone the PNG; do not materialize the
+            // entire encoded result in a Data buffer just to save a copy.
+            let temporary = destination.deletingLastPathComponent()
+                .appendingPathComponent(".defupscaler-\(UUID().uuidString).png")
+            let files = FileManager.default
+            defer { try? files.removeItem(at: temporary) }
+            try files.copyItem(at: source, to: temporary)
+            if files.fileExists(atPath: destination.path) {
+                _ = try files.replaceItemAt(destination, withItemAt: temporary)
+            } else {
+                try files.moveItem(at: temporary, to: destination)
+            }
         case "jpg", "jpeg":
             try writeJPEG(from: source, to: destination)
         default:

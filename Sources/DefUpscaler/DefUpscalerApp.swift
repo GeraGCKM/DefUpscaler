@@ -115,6 +115,7 @@ struct ContentView: View {
     @State private var original: NSImage?
     @State private var originalItemID: UUID?
     @State private var compareToken = UUID()
+    @State private var comparisonTask: Task<Void, Never>?
     private var movement: Animation? { reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.88) }
     private var canCompare: Bool {
         model.selected?.result != nil && original != nil &&
@@ -152,6 +153,7 @@ struct ContentView: View {
         .onChange(of: model.actualSize) { _, _ in loadComparison() }
         .onChange(of: model.selected?.result) { _, _ in loadComparison() }
         .onAppear(perform: loadComparison)
+        .onDisappear { comparisonTask?.cancel() }
         .onDrop(of: [.fileURL], isTargeted: $targeted) { providers in
             let files = providers.filter { $0.hasItemConformingToTypeIdentifier("public.file-url") }
             Task { @MainActor in
@@ -377,6 +379,7 @@ struct ContentView: View {
     }
 
     private func loadComparison() {
+        comparisonTask?.cancel()
         let token = UUID()
         compareToken = token
         if originalItemID != model.selectedID { original = nil }
@@ -386,22 +389,21 @@ struct ContentView: View {
             return
         }
         let full = model.actualSize || model.detailedPreview
-        Task.detached(priority: .userInitiated) {
-            let source = CGImageSourceCreateWithURL(selected.input as CFURL, nil)
-            let cg = source.flatMap {
-                CGImageSourceCreateThumbnailAtIndex($0, 0, [
-                    kCGImageSourceCreateThumbnailFromImageAlways: true,
-                    kCGImageSourceCreateThumbnailWithTransform: true,
-                    kCGImageSourceThumbnailMaxPixelSize: full ? 32768 : 1800
-                ] as CFDictionary)
-            }
-            await MainActor.run {
-                guard compareToken == token, model.selectedID == selected.id, model.selected?.result == url else { return }
-                original = cg.map { NSImage(cgImage: $0, size: .zero) }
+        comparisonTask = Task {
+            do {
+                let cg = try await PreviewDecoder.inspection.image(at: selected.input,
+                    maximumDimension: full ? 32768 : 1800)
+                guard !Task.isCancelled, compareToken == token,
+                      model.selectedID == selected.id, model.selected?.result == url else { return }
+                original = NSImage(cgImage: cg, size: .zero)
                 originalItemID = selected.id
+            } catch is CancellationError {} catch {
+                guard compareToken == token else { return }
+                original = nil
             }
         }
     }
+
     private func resetZoom() {
         model.setActualSize(false)
     }
@@ -471,17 +473,14 @@ private struct QueueThumbnail: View {
                 Image(systemName: "photo").foregroundStyle(.secondary)
             }
         }
+        .onDisappear { thumbnail = nil }
         .task(id: url) {
-            let result: CGImage? = await Task.detached(priority: .utility) {
-                guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-                return CGImageSourceCreateThumbnailAtIndex(source, 0, [
-                    kCGImageSourceCreateThumbnailFromImageAlways: true,
-                    kCGImageSourceCreateThumbnailWithTransform: true,
-                    kCGImageSourceThumbnailMaxPixelSize: 160
-                ] as CFDictionary)
-            }.value
-            guard !Task.isCancelled else { return }
-            thumbnail = result.map { NSImage(cgImage: $0, size: .zero) }
+            do {
+                let result = try await PreviewDecoder.thumbnails.image(at: url, maximumDimension: 160)
+                guard !Task.isCancelled else { return }
+                thumbnail = NSImage(cgImage: result, size: .zero)
+            } catch { /* Keep the lightweight placeholder for unreadable files. */ }
+
         }
     }
 }

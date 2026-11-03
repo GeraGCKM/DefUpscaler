@@ -75,10 +75,9 @@ struct NativeImageCanvas: NSViewRepresentable {
                     settle.timingFunction = CAMediaTimingFunction(name: .easeOut)
                     document.layer?.add(settle, forKey: "preview-settle")
                 }
-                document.result = result
-                document.original = original
-                document.comparing = shouldCompare
-                document.needsDisplay = true
+                if imageChanged { document.result = result }
+                if originalChanged { document.original = original }
+                if document.comparing != shouldCompare { document.comparing = shouldCompare }
             }
             document.reducedMotion = reduceMotion
         }
@@ -217,8 +216,8 @@ final class CenteringCanvasClipView: NSClipView {
 /// overlays; the source/result images are never recomputed or CPU-redrawn for
 /// each pointer event.
 final class ComparisonDocumentView: NSView {
-    var result: NSImage? { didSet { updateImageContents() } }
-    var original: NSImage? { didSet { updateImageContents() } }
+    var result: NSImage? { didSet { updateResultContents() } }
+    var original: NSImage? { didSet { updateOriginalContents() } }
     var comparing = false { didSet { updateGeometry() } }
     var reducedMotion = false
     var zoom: CGFloat = 1 {
@@ -283,17 +282,25 @@ final class ComparisonDocumentView: NSView {
         grip.addSublayer(gripMarks)
         root.addSublayer(grip)
 
-        updateImageContents()
+        updateResultContents()
+        updateOriginalContents()
         updateGeometry()
     }
 
-    private func updateImageContents() {
+    private func updateResultContents() {
         guard installed else { return }
-        // NSImage was initialized with CGImage on the preview-loader actor;
-        // retaining the CGImage as layer contents avoids expensive redraws.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         resultImage.contents = result?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        CATransaction.commit()
+    }
+
+    private func updateOriginalContents() {
+        guard installed else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         originalImage.contents = original?.cgImage(forProposedRect: nil, context: nil, hints: nil)
-        updateGeometry()
+        CATransaction.commit()
     }
 
     func updateViewportGeometry() { updateGeometry() }

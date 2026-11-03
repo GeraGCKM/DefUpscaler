@@ -26,28 +26,27 @@ struct LoadedPreview: @unchecked Sendable {
 
 actor PreviewLoader {
     private let colorContext = CIContext(options: [.cacheIntermediates: false])
-    func load(_ url: URL, full: Bool) throws -> LoadedPreview {
+    func load(_ url: URL, full: Bool) async throws -> LoadedPreview {
         try Task.checkCancellation()
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
         let metadata = try ImageInspector.read(url)
         guard metadata.width <= 32768, metadata.height <= 32768,
               UInt64(metadata.width) * UInt64(metadata.height) <= 64_000_000 else { throw UpscaleError.tooLarge }
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-                kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceCreateThumbnailWithTransform: true,
-                kCGImageSourceThumbnailMaxPixelSize: full ? max(metadata.width, metadata.height) : 1400
-              ] as CFDictionary) else { throw UpscaleError.invalidImage }
+        let cg = try await PreviewDecoder.inspection.image(at: url,
+            maximumDimension: full ? max(metadata.width, metadata.height) : 1400)
         try Task.checkCancellation()
         // Only three one-pixel reductions per import, off the main thread.
         // The ambient scene uses gradients, never a continuously blurred image.
-        let image = CIImage(cgImage: cg)
-        let whole = CGRect(x: 0, y: 0, width: cg.width, height: cg.height)
-        let upper = CGRect(x: 0, y: CGFloat(cg.height) * 0.45,
-                           width: CGFloat(cg.width) * 0.65, height: CGFloat(cg.height) * 0.55)
-        let lower = CGRect(x: CGFloat(cg.width) * 0.35, y: 0,
-                           width: CGFloat(cg.width) * 0.65, height: CGFloat(cg.height) * 0.55)
+        // Reduce to a tiny sample before the three color reductions; opening a
+        // 64 MP result must not allocate a full-size GPU texture for ambience.
+        let sampleImage = try await PreviewDecoder.inspection.image(at: url, maximumDimension: 64)
+        let image = CIImage(cgImage: sampleImage)
+        let whole = image.extent
+        let upper = CGRect(x: 0, y: CGFloat(sampleImage.height) * 0.45,
+                           width: CGFloat(sampleImage.width) * 0.65, height: CGFloat(sampleImage.height) * 0.55)
+        let lower = CGRect(x: CGFloat(sampleImage.width) * 0.35, y: 0,
+                           width: CGFloat(sampleImage.width) * 0.65, height: CGFloat(sampleImage.height) * 0.55)
         func sample(_ region: CGRect) -> (Double, Double, Double) {
             let average = image.applyingFilter("CIAreaAverage", parameters: [
                 kCIInputExtentKey: CIVector(cgRect: region)
@@ -95,6 +94,8 @@ final class AppModel: ObservableObject {
     private var task: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
     private var generation = UUID()
+    private var displayedURL: URL?
+    private var displayedFull = false
     private let loader = PreviewLoader()
     private let engine = UpscaleEngine()
     private let logger = Logger(subsystem: "io.geragckm.DefUpscaler", category: "ui")
@@ -143,6 +144,7 @@ final class AppModel: ObservableObject {
     func select(_ id: UUID) { detailedPreview = false; actualSize = false; selectedID = id; showingResult = true; refreshPreview() }
     func setActualSize(_ enabled: Bool) {
         actualSize = enabled
+        if !enabled { detailedPreview = false }
         zoomRevision = UUID()
         refreshPreview()
     }
@@ -158,6 +160,11 @@ final class AppModel: ObservableObject {
         generation = token
         let url = showingResult ? selected.result ?? selected.input : selected.input
         let full = actualSize || detailedPreview
+        // Repeated fit/100% commands still update geometry without decoding twice.
+        if displayedURL == url, previewItemID == selected.id, displayedFull == full, preview != nil {
+            loading = false
+            return
+        }
         loading = true
         message = nil
         previewTask = Task {
@@ -165,6 +172,8 @@ final class AppModel: ObservableObject {
                 let loaded = try await loader.load(url, full: full)
                 guard generation == token, !Task.isCancelled else { return }
                 // Keep the old image visible until its replacement is decoded.
+                displayedURL = url
+                displayedFull = full
                 preview = NSImage(cgImage: loaded.image, size: .zero)
                 ambiance = Color(red: loaded.averageColor.0, green: loaded.averageColor.1,
                                   blue: loaded.averageColor.2)
@@ -313,6 +322,8 @@ final class AppModel: ObservableObject {
         guard !running, !saving, confirmDiscard() else { return }
         previewTask?.cancel(); generation = UUID()
         for item in items { if let result = item.result { try? FileManager.default.removeItem(at: result) } }
+        displayedURL = nil; displayedFull = false; detailedPreview = false; actualSize = false
+        Task { await PreviewDecoder.inspection.clear(); await PreviewDecoder.thumbnails.clear() }
         items = []; selectedID = nil; preview = nil; previewItemID = nil; metadata = nil; loading = false; message = nil; progress = 0
     }
 }

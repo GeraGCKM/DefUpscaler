@@ -1,3 +1,11 @@
+# 0.3 provisional — lightweight preview and export
+
+- Serial background decode lanes replace independent thumbnail/comparison tasks. Cancelled queued requests skip decode; small previews use evictable, cost-budgeted caches (4 MiB thumbnails, 16 MiB inspection). Full-resolution images are not cached.
+- Ambient colors sample a 64px image instead of reducing full-resolution textures. Repeated zoom commands reuse the displayed image; returning to fit releases full-resolution preview references.
+- Comparison loading cancels obsolete requests; unchanged image layers are not reassigned. Offscreen queue cells release their thumbnail reference.
+- PNG export uses a temporary file copy and atomic replacement instead of a whole-file Data buffer. Neural precision and model behavior remain unchanged.
+- These remove identified redundant work; no measured battery/RAM percentage improvement is claimed.
+
 # 0.3 provisional — delivery polish
 
 - Stable native glass identities transform the action surface into progress and back into save; controls sit outside the inspection viewport.
