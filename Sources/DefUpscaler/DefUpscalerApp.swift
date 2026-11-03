@@ -73,6 +73,11 @@ struct DefUpscalerApp: App {
                     Text("Clara").tag("light")
                     Text("Oscura").tag("dark")
                 }
+                Toggle("Mezcla conservadora para fotografía", isOn: $model.proFidelity)
+                    .help("Conserva 75 % del remuestreo tradicional y 25 % de inferencia neuronal. No garantiza mayor fidelidad; compárala con el modo estándar.")
+                    .disabled(model.running)
+                Text("La mezcla conservadora evita algunos cambios de textura, pero no recupera más detalle real. Para uso normal, déjala desactivada.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Text("Salida: PNG SDR sRGB de 8 bits, con transparencia. HDR no se conserva. Las imágenes de más de 8 bits se rechazan; HEIC con mapa HDR usa su imagen base SDR.")
                     .font(.caption).foregroundStyle(.secondary)
             }.padding(24).frame(width: 400)
@@ -258,18 +263,6 @@ struct ContentView: View {
             Picker("Escala", selection: $model.scale) {
                 ForEach([2,4,8,16], id: \.self) { Text("\($0)×").tag($0) }
             }.labelsHidden().frame(width: 64).disabled(model.running)
-            if model.mode == .photo {
-                Toggle(isOn: $model.proFidelity) {
-                    Label("Pro", systemImage: "sparkles")
-                        .labelStyle(.titleOnly)
-                }
-                .toggleStyle(.button)
-                .disabled(model.running)
-                .help("Pro · fidelidad: 75 % reescalado del original y 25 % IA. " +
-                      "RealPLKSR para 4× o más; Real-ESRGAN nativo en 2×. " +
-                      "Más conservador, no garantiza recuperar detalles reales.")
-                .accessibilityLabel("Pro: priorizar fidelidad al original")
-            }
             Spacer(minLength: 0)
             if canCompare {
                 Toggle(isOn: $compare) {
@@ -307,38 +300,20 @@ struct ContentView: View {
 
     private var queue: some View {
         ScrollView(.horizontal) {
-            HStack(spacing: 9) {
+            LazyHStack(spacing: 8) {
                 ForEach(model.items) { item in
-                    Button { model.select(item.id) } label: {
-                        VStack(spacing: 4) {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 8).fill(.quaternary)
-                                QueueThumbnail(url: item.input)
-                            }
-                            .frame(width: 62, height: 47).clipShape(RoundedRectangle(cornerRadius: 8))
-                            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(
-                                item.id == model.selectedID ? Color.accentColor : .clear, lineWidth: 2))
-                            HStack(spacing: 3) {
-                                if item.result != nil {
-                                    Image(systemName: item.proFidelity ? "sparkles" : "checkmark.circle.fill")
-                                } else if item.state == "En proceso" {
-                                    Image(systemName: "hourglass")
-                                }
-                                Text(item.input.deletingPathExtension().lastPathComponent)
-                                    .lineLimit(1).frame(width: 48)
-                            }.font(.system(size: 9))
-                        }
+                    QueueCell(item: item, selected: item.id == model.selectedID) {
+                        model.select(item.id)
                     }
-                    .buttonStyle(.plain)
-                    .help(item.input.lastPathComponent + " · " + item.state +
-                          (item.proFidelity ? " · Pro fidelidad" : ""))
-                    .accessibilityLabel(item.input.lastPathComponent + ", " + item.state)
                 }
-            }.padding(.horizontal, 16).padding(.vertical, 10)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
         }
         .scrollIndicators(.hidden)
-        .frame(height: 87)
+        .frame(height: 85)
         .background(.bar)
+        .accessibilityLabel("Cola de imágenes")
     }
 
     private func loadComparison() {
@@ -364,6 +339,52 @@ struct ContentView: View {
     private func resetZoom() {
         model.actualSize = false
         model.refreshPreview()
+    }
+}
+
+private struct QueueCell: View {
+    let item: QueueItem
+    let selected: Bool
+    let onSelect: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: onSelect) {
+            VStack(spacing: 5) {
+                QueueThumbnail(url: item.input)
+                    .frame(width: 68, height: 47)
+                    .clipShape(RoundedRectangle(cornerRadius: 9))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 9)
+                            .strokeBorder(selected ? Color.accentColor : Color.primary.opacity(hovered ? 0.26 : 0), lineWidth: selected ? 2 : 1)
+                    }
+                HStack(spacing: 3) {
+                    if item.result != nil {
+                        Image(systemName: item.proFidelity ? "sparkles" : "checkmark.circle.fill")
+                    } else if item.state == "En proceso" {
+                        Image(systemName: "hourglass")
+                    }
+                    Text(item.input.deletingPathExtension().lastPathComponent)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .font(.system(size: 10, weight: selected ? .medium : .regular))
+                .frame(width: 68)
+            }
+            .padding(5)
+            .background(selected ? Color.accentColor.opacity(0.09) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 13))
+            .scaleEffect(hovered ? 1.035 : 1)
+            .contentShape(RoundedRectangle(cornerRadius: 13))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .animation(reduceMotion ? nil : .smooth(duration: 0.19), value: hovered)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.23), value: selected)
+        .help(item.input.lastPathComponent + " · " + item.state)
+        .accessibilityLabel(item.input.lastPathComponent + ", " + item.state)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
