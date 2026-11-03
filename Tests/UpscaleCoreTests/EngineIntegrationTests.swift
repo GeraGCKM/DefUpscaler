@@ -96,6 +96,39 @@ final class EngineIntegrationTests: XCTestCase {
         XCTAssertEqual(Int(result.extent.height), 14)
     }
 
+    func testWebPhotoFourTimes() async throws {
+        guard let model = ProcessInfo.processInfo.environment["DEFUPSCALER_WEBPHOTO_MODEL"] else {
+            throw XCTSkip("Optional verified WebPhoto Core ML model is required")
+        }
+        let context = CIContext()
+        let color = CGColorSpace(name: CGColorSpace.sRGB)!
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let input = folder.appendingPathComponent("webphoto-test.png")
+        let bounds = CGRect(x: 0, y: 0, width: 9, height: 7)
+        let bg = CIImage(color: .clear).cropped(to: bounds)
+        let stroke = CIImage(color: CIColor(red: 0.4, green: 0.8, blue: 0.2, alpha: 0.5))
+            .cropped(to: CGRect(x: 3, y: 0, width: 6, height: 7))
+        try context.writePNGRepresentation(of: stroke.composited(over: bg), to: input,
+                                           format: .RGBA8, colorSpace: color)
+        let engine = UpscaleEngine(modelURL: URL(fileURLWithPath: model))
+        let output = try await engine.process(url: input, scale: 4, mode: .photoDetail) { _ in }
+        defer { try? FileManager.default.removeItem(at: output) }
+        guard let result = CIImage(contentsOf: output) else {
+            XCTFail("Model produced no image"); return
+        }
+        XCTAssertEqual(Int(result.extent.width), 36)
+        XCTAssertEqual(Int(result.extent.height), 28)
+        var sample = [UInt8](repeating: 0, count: 4)
+        sample.withUnsafeMutableBytes {
+            context.render(result, toBitmap: $0.baseAddress!, rowBytes: 4,
+                           bounds: CGRect(x: 28, y: 12, width: 1, height: 1),
+                           format: .RGBA8, colorSpace: color)
+        }
+        XCTAssertLessThanOrEqual(abs(Int(sample[3]) - 128), 2)
+    }
+
     func testAlreadyCancelledJobNeverLoadsModel() async throws {
         let engine = UpscaleEngine()
         let task = Task {

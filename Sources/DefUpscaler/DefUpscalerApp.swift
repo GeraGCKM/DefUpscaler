@@ -240,7 +240,10 @@ struct ContentView: View {
     private var actionRow: some View {
         HStack(spacing: 9) {
             Picker("Tipo", selection: $model.mode) {
-                ForEach(ImageMode.allCases, id: \.self) { Text($0.title).tag($0) }
+                ForEach(ImageMode.allCases.filter {
+                    $0 != .photoDetail ||
+                    Bundle.main.url(forResource: "WebPhoto4x", withExtension: "mlmodelc") != nil
+                }, id: \.self) { Text($0.title).tag($0) }
             }.labelsHidden().frame(maxWidth: 160).disabled(model.running)
             Picker("Escala", selection: $model.scale) {
                 ForEach([2,4,8,16], id: \.self) { Text("\($0)×").tag($0) }
