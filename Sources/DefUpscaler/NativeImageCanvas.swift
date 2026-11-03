@@ -56,6 +56,12 @@ struct NativeImageCanvas: NSViewRepresentable {
                     transition.duration = 0.18
                     transition.timingFunction = CAMediaTimingFunction(name: .easeOut)
                     document.layer?.add(transition, forKey: "preview-transition")
+                    let settle = CABasicAnimation(keyPath: "transform.scale")
+                    settle.fromValue = 0.989
+                    settle.toValue = 1.0
+                    settle.duration = 0.25
+                    settle.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                    document.layer?.add(settle, forKey: "preview-settle")
                 }
                 document.result = result
                 document.original = original
@@ -97,11 +103,13 @@ struct NativeImageCanvas: NSViewRepresentable {
                 let fitted = min(viewport.width / imageSize.width, viewport.height / imageSize.height)
                 let width = max(1, floor(imageSize.width * fitted))
                 let height = max(1, floor(imageSize.height * fitted))
+                // Update the cached geometry first: changing the document size
+                // may synchronously invoke a nested NSScrollView layout.
+                lastViewport = viewport
+                lastImageSize = imageSize
                 if document.frame.size != CGSize(width: width, height: height) {
                     document.setFrameSize(CGSize(width: width, height: height))
                 }
-                lastViewport = viewport
-                lastImageSize = imageSize
                 scroll.contentView.needsDisplay = true
             }
             if resetOnNextLayout {
@@ -126,9 +134,17 @@ struct NativeImageCanvas: NSViewRepresentable {
 
 final class CanvasScrollView: NSScrollView {
     var onLayout: (() -> Void)?
+
     override func layout() {
         super.layout()
         onLayout?()
+    }
+
+    override func magnify(with event: NSEvent) {
+        super.magnify(with: event)
+        // The comparison grip and line stay a fixed on-screen size even while
+        // the user is actively pinching, rather than after SwiftUI updates.
+        (documentView as? ComparisonDocumentView)?.zoom = magnification
     }
 }
 
