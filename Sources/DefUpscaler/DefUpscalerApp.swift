@@ -132,6 +132,7 @@ struct ContentView: View {
                     if model.running {
                         VStack(spacing: 5) {
                             ProgressView(value: model.progress)
+                                .animation(reduceMotion ? nil : .linear(duration: 0.12), value: model.progress)
                             HStack {
                                 Text(model.phase)
                                 Spacer()
@@ -172,13 +173,24 @@ struct ContentView: View {
         ZStack {
             Color(nsColor: .textBackgroundColor)
             if model.preview != nil && !reduceTransparency {
+                // Apple Music-like atmosphere without a live full-image blur:
+                // three precomputed area colors drive static system gradients.
                 RadialGradient(colors: [
-                    model.ambiance.opacity(scheme == .dark ? 0.4 : 0.22),
-                    model.ambiance.opacity(scheme == .dark ? 0.1 : 0.06),
+                    model.ambianceSecondary.opacity(scheme == .dark ? 0.35 : 0.19),
                     .clear
-                ], center: .center, startRadius: 0, endRadius: 620)
-                .animation(movement, value: model.previewRevision)
-                .allowsHitTesting(false)
+                ], center: .topLeading, startRadius: 24, endRadius: 690)
+                    .allowsHitTesting(false)
+                RadialGradient(colors: [
+                    model.ambianceTertiary.opacity(scheme == .dark ? 0.32 : 0.17),
+                    .clear
+                ], center: .bottomTrailing, startRadius: 16, endRadius: 620)
+                    .allowsHitTesting(false)
+                RadialGradient(colors: [
+                    model.ambiance.opacity(scheme == .dark ? 0.20 : 0.11),
+                    .clear
+                ], center: .center, startRadius: 0, endRadius: 700)
+                    .allowsHitTesting(false)
+                    .animation(movement, value: model.previewRevision)
             }
             if let preview = model.preview {
                 NativeImageCanvas(
