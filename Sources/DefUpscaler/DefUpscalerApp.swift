@@ -112,11 +112,9 @@ struct ContentView: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var targeted = false
     @State private var compare = true
-    @State private var divider = 0.5
      @State private var showQueue = true
     @State private var original: NSImage?
     @State private var compareToken = UUID()
-    @State private var dividerDragStart: CGFloat?
     private var movement: Animation? { reduceMotion ? nil : .smooth(duration: 0.24) }
     private var canCompare: Bool {
         model.selected?.result != nil && original != nil &&
@@ -206,7 +204,8 @@ struct ContentView: View {
                         model.refreshPreview()
                     }
                 )
-                .id(model.selectedID)
+                // Preserve the same native scroll view across selections: the
+                // AppKit canvas performs a real interruptible content transition.
                 .accessibilityLabel("Imagen, desplaza con dos dedos o pellizca para ampliar")
             } else {
                 VStack(spacing: 12) {
@@ -297,12 +296,18 @@ struct ContentView: View {
             } label: { Image(systemName: "ellipsis").frame(width: 24) }
                 .menuStyle(.borderlessButton).accessibilityLabel("Más acciones")
             if model.running {
-                Button("Cancelar", action: model.cancel)
+                Button(action: model.cancel) {
+                    Label("Cancelar", systemImage: "xmark")
+                }
             } else if model.hasPending {
-                Button("Reescalar", action: model.start).modifier(PrimaryAction())
+                Button(action: model.start) {
+                    Label("Reescalar", systemImage: "play.fill")
+                }.modifier(PrimaryAction())
                     .keyboardShortcut(.defaultAction).disabled(model.saving || model.loading)
             } else if model.selected?.result != nil {
-                Button("Guardar", action: model.save).modifier(PrimaryAction()).disabled(model.saving)
+                Button(action: model.save) {
+                    Label("Guardar", systemImage: "square.and.arrow.down")
+                }.modifier(PrimaryAction()).disabled(model.saving)
             } else {
                 Button("Reescalar", action: model.start).disabled(true)
             }
